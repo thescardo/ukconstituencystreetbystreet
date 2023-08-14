@@ -25,7 +25,7 @@ class CsvName(enum.StrEnum):
 
 class DbCache:
     def __init__(self) -> None:
-        self.cache_db_file, self.engine = get_engine()
+        self.engine = get_engine()
         self.session = Session(self.engine)
         self.logger = logging.getLogger(self.__class__.__name__)
 

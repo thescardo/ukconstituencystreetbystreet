@@ -1,13 +1,19 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 name = "ukconstuencystreetcheck"
 description = "Parses csv files from ONS and Royal Mail free data"
 dynamic = ["dependencies", "optional-dependencies"]
 version = "0.1.0"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GPL 2.0",
+    "Operating System :: OS Independent",
+]
 
 [project.license]
 text = "GPL-3.0"
@@ -59,3 +65,6 @@ target-version = "py311"
 
 [tool.isort]
 profile = "black"
+
+[project.scripts]
+output-postcodes = "ukconstituencyaddr.outputter:output_csvs"

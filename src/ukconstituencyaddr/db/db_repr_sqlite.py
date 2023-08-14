@@ -2,7 +2,7 @@ import enum
 import logging
 import pathlib
 from datetime import datetime
-from typing import List, Optional, Protocol, Tuple, Any, Dict
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from sqlalchemy import Engine, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import (
@@ -10,20 +10,21 @@ from sqlalchemy.orm import (
     Mapped,
     MappedAsDataclass,
     Session,
+    exc,
     mapped_column,
     relationship,
-    exc,
 )
+
+from ukconstituencyaddr.config import MAIN_STORAGE_FOLDER
+
+CACHE_DB_FILE = MAIN_STORAGE_FOLDER / "local_cache.sqlite"
 
 
 def get_engine() -> Tuple[pathlib.Path, Engine]:
-    cache_folder = pathlib.Path("streetcache").absolute().resolve()
-    cache_folder.mkdir(parents=True, exist_ok=True)
-    cache_db_file = cache_folder / "cache.sqlite"
     engine = create_engine(
-        f"sqlite+pysqlite:///{str(cache_db_file)}",
+        f"sqlite+pysqlite:///{str(CACHE_DB_FILE)}",
     )
-    return cache_db_file, engine
+    return engine
 
 
 class Cacher(Protocol):

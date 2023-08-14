@@ -7,14 +7,11 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from db import cacher
-from db import db_repr_sqlite as db_repr
+from ukconstituencyaddr.config import config
+from ukconstituencyaddr.db import cacher
+from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 logger = logging.getLogger(__name__)
-
-ROYAL_MAIL_CSV = pathlib.Path(
-    "/home/the/Workspace/GNDR/postcode_lookup/RoyalMail Data/_Y23M05DataSamples/CSV PAF/CSV PAF.csv"
-)
 
 
 class RoyalMailPafField(enum.IntEnum):
@@ -41,14 +38,14 @@ class RoyalMailPafField(enum.IntEnum):
 
 
 class PafCsvParser:
-    def __init__(self, paf_csv: pathlib.Path = ROYAL_MAIL_CSV) -> None:
-        self.csv = paf_csv
-        assert self.csv.exists()
+    def __init__(self) -> None:
+        self.csv = config.input.royal_mail_paf_csv
+        if not self.csv.exists():
+            raise Exception(f"CSV file not at {self.csv}")
 
         self.csv_name = cacher.CsvName.RoyalMailPaf
 
-        self.cache_db_file, self.engine = db_repr.get_engine()
-        self.session = Session(self.engine)
+        self.engine = db_repr.get_engine()
 
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info(f"Using CSV {self.csv}")
@@ -159,8 +156,11 @@ class PafCsvParser:
 
         self.logger.info(f"Finished parsing PAF file, wrote {len(rows.index)} items")
 
-    @db_repr.wrap_session
     def clear_all(self):
-        self.session.query(db_repr.RoyalMailPaf).delete()
-        self.session.commit()
-        cacher.DbCacheInst.clear_file_modified(self.csv_name)
+        session = Session(self.engine)
+        try:
+            session.query(db_repr.RoyalMailPaf).delete()
+            session.commit()
+            cacher.DbCacheInst.clear_file_modified(self.csv_name)
+        finally:
+            session.close()

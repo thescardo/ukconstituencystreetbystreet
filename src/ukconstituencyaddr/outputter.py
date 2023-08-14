@@ -1,0 +1,220 @@
+""""""
+import argparse
+import logging
+import multiprocessing
+import pathlib
+from collections import deque
+from typing import Deque, Dict, List
+import concurrent.futures
+import asyncio
+
+import pandas as pd
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+import tqdm
+
+from ukconstituencyaddr import config
+from ukconstituencyaddr import ons_constituencies
+from ukconstituencyaddr import ons_postcodes
+from ukconstituencyaddr import royal_mail_paf
+from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+
+
+def init_loggers():
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d %(name)s %(message)s",
+        handlers=[
+            logging.FileHandler(config.MAIN_STORAGE_FOLDER / "streetcheck.log"),
+        ],
+    )
+    logging.getLogger()
+
+    for name in ["sqlalchemy", "sqlalchemy.engine"]:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+
+
+class ConstituencyInfoOutputter:
+    def __init__(self) -> None:
+        self.constituency_parser = ons_constituencies.ConstituencyCsvParser()
+        self.postcode_parser = ons_postcodes.PostcodeCsvParser(self.constituency_parser)
+        self.paf_parser = royal_mail_paf.PafCsvParser()
+
+        self.output_folder = config.config.output.output_folder
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+        self.use_subfolders = config.config.output.use_subfolders
+
+        self.engine = db_repr.get_engine()
+
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    def get_constituency_folder(self, constituency_name: str):
+        if self.use_subfolders:
+            constituency_output = self.output_folder / constituency_name
+            constituency_output.mkdir(parents=True, exist_ok=True)
+        else:
+            constituency_output = self.output_folder
+
+        return constituency_output
+
+    def process_csvs(self):
+        parsers = [self.constituency_parser, self.postcode_parser, self.paf_parser]
+        process = tqdm.tqdm(total=len(parsers), desc="Importing CSVs to local database")
+        for x in parsers:
+            try:
+                x.process_csv()
+            except:
+                self.logger.error("Caught exception, clearing constituency cache")
+                x.clear_all()
+                raise
+            process.update(1)
+
+    def make_csv_streets_in_constituency(
+        self, constituency_name: str = None, constituency_id: str = None
+    ):
+        assert constituency_id is not None or constituency_name is not None
+        session = Session(self.engine)
+
+        try:
+            if constituency_name is None:
+                constituency_name = self.constituency_parser.get_constituency(
+                    constituency_id
+                ).name
+
+            base_query = (
+                session.query(db_repr.RoyalMailPaf)
+                .join(db_repr.OnsPostcode)
+                .join(db_repr.OnsConstituency)
+            )
+
+            if constituency_id is not None:
+                mid_query = base_query.filter(
+                    db_repr.OnsConstituency.id == constituency_id
+                )
+            else:
+                mid_query = base_query.filter(
+                    db_repr.OnsConstituency.name == constituency_name
+                )
+
+            final_query = mid_query.distinct(
+                db_repr.RoyalMailPaf.thoroughfare_and_desc
+            ).with_entities(db_repr.RoyalMailPaf.thoroughfare_and_desc)
+
+            df = pd.read_sql(final_query.selectable, self.engine)
+            if len(df.index) == 0:
+                self.logger.debug(
+                    f"Found no addresses for constituency {constituency_name}"
+                )
+            else:
+                dir = self.get_constituency_folder(constituency_name)
+                df.to_csv(str(dir / f"{constituency_name} Street Names.csv"))
+        finally:
+            session.close()
+
+    def make_csv_addresses_in_constituency(
+        self, constituency_name: str = None, constituency_id: str = None
+    ):
+        assert constituency_id is not None or constituency_name is not None
+        session = Session(self.engine)
+
+        try:
+            if constituency_name is None:
+                constituency_name = self.constituency_parser.get_constituency(
+                    constituency_id
+                ).name
+
+            base_query = (
+                session.query(db_repr.RoyalMailPaf)
+                .join(db_repr.OnsPostcode)
+                .join(db_repr.OnsConstituency)
+            )
+
+            if constituency_id is not None:
+                final_query = base_query.filter(
+                    db_repr.OnsConstituency.id == constituency_id
+                )
+            else:
+                final_query = base_query.filter(
+                    db_repr.OnsConstituency.name == constituency_name
+                )
+
+            df = pd.read_sql(final_query.selectable, self.engine)
+            if len(df.index) == 0:
+                self.logger.debug(
+                    f"Found no addresses for constituency {constituency_name}"
+                )
+            else:
+                dir = self.get_constituency_folder(constituency_name)
+                df.to_csv(str(dir / f"{constituency_name} Addresses.csv"))
+        finally:
+            session.close()
+
+    def make_csvs_for_all_constituencies(self):
+        session = Session(self.engine)
+        try:
+            all_constituencies = [
+                constituency.id
+                for constituency in session.query(db_repr.OnsConstituency).all()
+            ]
+
+            def make_csvs_for_constituency(constituency_id: str) -> bool:
+                self.make_csv_streets_in_constituency(constituency_id=constituency_id)
+                self.make_csv_addresses_in_constituency(constituency_id=constituency_id)
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=multiprocessing.cpu_count()
+            ) as executor:
+                results = list(
+                    tqdm.tqdm(
+                        executor.map(make_csvs_for_constituency, all_constituencies),
+                        total=len(all_constituencies),
+                        desc="Outputting addresses to CSV",
+                    )
+                )
+            return results
+        finally:
+            session.close()
+
+
+def output_csvs():
+    parser = argparse.ArgumentParser(
+        prog="UKConstituencyStreetCheck",
+        description="Processes ONS data along with Royal Mail data "
+        "to produce lists of addresses in a constituency."
+        "When run the first time, it will create a folder where it will"
+        "keep all of its config and local cache, and another folder"
+        "(configurable) to output all CSVs that you wish to create.",
+        epilog="You need to download the data yourself, see the README",
+    )
+    parser.add_argument(
+        "-i",
+        "--init_config",
+        action="store_true",
+        help="If specified, only initialise config and config folder",
+    )
+    parser.add_argument(
+        "-c",
+        "--constituency",
+        help="If specified, only output CSVs for that constituency",
+    )
+    parser.add_argument(
+        "-b",
+        "--build_cache",
+        action="store_true",
+        help="If specified, build the local database cache",
+    )
+
+    args = parser.parse_args()
+
+    if not args.init_config:
+        init_loggers()
+
+        comb = ConstituencyInfoOutputter()
+        comb.process_csvs()
+
+        if not args.build_cache:
+            if args.constituency is not None:
+                comb.make_csv_streets_in_constituency(args.constituency)
+            else:
+                comb.make_csvs_for_all_constituencies()

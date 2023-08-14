@@ -6,13 +6,10 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from tqdm import tqdm
 
-import ons_constituencies
-from db import cacher
-from db import db_repr_sqlite as db_repr
-
-ONS_POSTCODE_CSV = pathlib.Path(
-    "/home/the/Workspace/GNDR/postcode_lookup/ONS Data/NSPL21_FEB_2023_UK/Data/NSPL21_FEB_2023_UK.csv"
-)
+from ukconstituencyaddr import ons_constituencies
+from ukconstituencyaddr.config import config
+from ukconstituencyaddr.db import cacher
+from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 
 class OnsPostcodeField(enum.StrEnum):
@@ -65,22 +62,20 @@ class PostcodeCsvParser:
     def __init__(
         self,
         constituencies: ons_constituencies.ConstituencyCsvParser,
-        ons_postcode_csv: pathlib.Path = ONS_POSTCODE_CSV,
     ) -> None:
-        self.csv = ons_postcode_csv
-        assert self.csv.exists()
+        self.csv = config.input.ons_postcodes_csv
+        if not self.csv.exists():
+            raise Exception(f"CSV file not at {self.csv}")
 
         self.csv_name = cacher.CsvName.OnsPostcode
         self.constituencies = constituencies
 
-        self.cache_db_file, self.engine = db_repr.get_engine()
-        self.session: Session
+        self.engine = db_repr.get_engine()
 
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.logger.info(f"Using CSV {self.csv}")
 
-    @db_repr.wrap_session
     def process_csv(self):
         modified = cacher.DbCacheInst.check_and_set_file_modified(
             self.csv_name, self.csv
@@ -143,8 +138,11 @@ class PostcodeCsvParser:
             f"Finished parsing ONS postcodes file, wrote {len(rows.index)} items"
         )
 
-    @db_repr.wrap_session
     def clear_all(self):
-        self.session.query(db_repr.OnsPostcode).delete()
-        self.session.commit()
-        cacher.DbCacheInst.clear_file_modified(self.csv_name)
+        session = Session(self.engine)
+        try:
+            session.query(db_repr.OnsPostcode).delete()
+            session.commit()
+            cacher.DbCacheInst.clear_file_modified(self.csv_name)
+        finally:
+            session.close()
