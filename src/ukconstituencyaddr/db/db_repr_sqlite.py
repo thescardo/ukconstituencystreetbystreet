@@ -20,7 +20,7 @@ from ukconstituencyaddr.config import MAIN_STORAGE_FOLDER
 CACHE_DB_FILE = MAIN_STORAGE_FOLDER / "local_cache.sqlite"
 
 
-def get_engine() -> Tuple[pathlib.Path, Engine]:
+def get_engine() -> Engine:
     engine = create_engine(
         f"sqlite+pysqlite:///{str(CACHE_DB_FILE)}",
     )
@@ -217,4 +217,26 @@ class RoyalMailPaf(Base):
             building_name=self.building_name,
             sub_building_name=self.sub_building_name,
             constituency=self.ons_postcode.constituency,
+        )
+
+
+class SimpleAddressColumnNames(enum.StrEnum):
+    ID = "id"
+    POSTCODE = "postcode"
+    ADDRESS_TEXT = "address_text"
+
+
+class SimpleAddress(Base):
+    __tablename__ = "simple_addresses"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(primary_key=True, name=SimpleAddressColumnNames.ID)
+    postcode = mapped_column(
+        ForeignKey("ons_postcode.postcode"), name=SimpleAddressColumnNames.POSTCODE
+    )
+    address_text = mapped_column(String, name=SimpleAddressColumnNames.ADDRESS_TEXT)
+
+    def __repr__(self) -> str:
+        return self._repr(
+            id=self.id, postcode=self.postcode, address_text=self.address_text
         )

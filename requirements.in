@@ -2,3 +2,6 @@ tqdm
 cython
 SQLAlchemy
 pandas
+requests
+free-proxy
+uvloop

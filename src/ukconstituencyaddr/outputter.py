@@ -1,22 +1,25 @@
 """"""
 import argparse
+import asyncio
+import concurrent.futures
 import logging
 import multiprocessing
 import pathlib
 from collections import deque
-from typing import Deque, Dict, List
-import concurrent.futures
-import asyncio
+from typing import Deque, Dict, List, Optional
 
 import pandas as pd
+import tqdm
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-import tqdm
 
-from ukconstituencyaddr import config
-from ukconstituencyaddr import ons_constituencies
-from ukconstituencyaddr import ons_postcodes
-from ukconstituencyaddr import royal_mail_paf
+from ukconstituencyaddr import (
+    config,
+    ons_constituencies,
+    ons_postcodes,
+    royal_mail_paf,
+    scraper,
+)
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 
@@ -39,7 +42,8 @@ class ConstituencyInfoOutputter:
     def __init__(self) -> None:
         self.constituency_parser = ons_constituencies.ConstituencyCsvParser()
         self.postcode_parser = ons_postcodes.PostcodeCsvParser(self.constituency_parser)
-        self.paf_parser = royal_mail_paf.PafCsvParser()
+        # self.paf_parser = royal_mail_paf.PafCsvParser()
+        self.paf_scraper = scraper.Scraper()
 
         self.output_folder = config.config.output.output_folder
         self.output_folder.mkdir(parents=True, exist_ok=True)
@@ -59,7 +63,7 @@ class ConstituencyInfoOutputter:
         return constituency_output
 
     def process_csvs(self):
-        parsers = [self.constituency_parser, self.postcode_parser, self.paf_parser]
+        parsers = [self.constituency_parser, self.postcode_parser]
         process = tqdm.tqdm(total=len(parsers), desc="Importing CSVs to local database")
         for x in parsers:
             try:
@@ -70,8 +74,13 @@ class ConstituencyInfoOutputter:
                 raise
             process.update(1)
 
+    def scrape(self):
+        self.paf_scraper.parse_addresses_for_postcode("S25PX", scraper.TEST_DATA)
+
     def make_csv_streets_in_constituency(
-        self, constituency_name: str = None, constituency_id: str = None
+        self,
+        constituency_name: Optional[str] = None,
+        constituency_id: Optional[str] = None,
     ):
         assert constituency_id is not None or constituency_name is not None
         session = Session(self.engine)
@@ -113,7 +122,9 @@ class ConstituencyInfoOutputter:
             session.close()
 
     def make_csv_addresses_in_constituency(
-        self, constituency_name: str = None, constituency_id: str = None
+        self,
+        constituency_name: Optional[str] = None,
+        constituency_id: Optional[str] = None,
     ):
         assert constituency_id is not None or constituency_name is not None
         session = Session(self.engine)
@@ -204,6 +215,12 @@ def output_csvs():
         action="store_true",
         help="If specified, build the local database cache",
     )
+    parser.add_argument(
+        "-s",
+        "--scrape",
+        action="store_true",
+        help="If specified, scrapes data from royal mail",
+    )
 
     args = parser.parse_args()
 
@@ -211,9 +228,13 @@ def output_csvs():
         init_loggers()
 
         comb = ConstituencyInfoOutputter()
-        comb.process_csvs()
 
         if not args.build_cache:
+            if args.scrape:
+                comb.scrape()
+                return
+
+            comb.process_csvs()
             if args.constituency is not None:
                 comb.make_csv_streets_in_constituency(args.constituency)
             else:
