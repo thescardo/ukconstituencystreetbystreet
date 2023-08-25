@@ -1,41 +1,21 @@
 """"""
 import argparse
-import asyncio
 import concurrent.futures
 import logging
 import multiprocessing
-import pathlib
-from collections import deque
-from typing import Deque, Dict, List, Optional
+from typing import Optional
 
 import pandas as pd
 import tqdm
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ukconstituencyaddr import (
     config,
     ons_constituencies,
     ons_postcodes,
-    royal_mail_paf,
     scraper,
 )
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
-
-
-def init_loggers():
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d %(name)s %(message)s",
-        handlers=[
-            logging.FileHandler(config.MAIN_STORAGE_FOLDER / "streetcheck.log"),
-        ],
-    )
-    logging.getLogger()
-
-    for name in ["sqlalchemy", "sqlalchemy.engine"]:
-        logger = logging.getLogger(name)
-        logger.setLevel(logging.WARNING)
 
 
 class ConstituencyInfoOutputter:
@@ -226,6 +206,7 @@ def output_csvs():
 
     if not args.init_config:
         init_loggers()
+        config.parse_config()
 
         comb = ConstituencyInfoOutputter()
 

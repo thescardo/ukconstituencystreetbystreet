@@ -1,10 +1,8 @@
 import enum
 import logging
-import pathlib
 
 import pandas as pd
 from sqlalchemy.orm import Session
-from tqdm import tqdm
 
 from ukconstituencyaddr import ons_constituencies
 from ukconstituencyaddr.config import config
@@ -119,7 +117,7 @@ class PostcodeCsvParser:
                 OnsPostcodeField.POSTCODE: "postcode",
                 OnsPostcodeField.COUNTRY: "country_id",
                 OnsPostcodeField.REGION: "region_id",
-                OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY: "constituency_id",
+                OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY: "constituency_id",  # noqa: E501
                 OnsPostcodeField.ELECTORAL_WARD: "electoral_ward_id",
             },
             inplace=True,

@@ -9,9 +9,6 @@ from sqlalchemy.orm import Session
 from .db_repr_sqlite import (
     Base,
     CsvFilesModified,
-    OnsConstituency,
-    OnsPostcode,
-    RoyalMailPaf,
     get_engine,
     wrap_session,
 )

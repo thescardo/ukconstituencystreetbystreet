@@ -1,14 +1,8 @@
-import csv
 import enum
 import logging
-import math
-import pathlib
-import time
 from typing import Dict, Optional
 
 import pandas as pd
-import tqdm
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ukconstituencyaddr.config import config

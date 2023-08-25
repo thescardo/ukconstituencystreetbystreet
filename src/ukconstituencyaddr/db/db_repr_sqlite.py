@@ -1,14 +1,12 @@
 import enum
 import logging
-import pathlib
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol
 
 from sqlalchemy import Engine, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
-    MappedAsDataclass,
     Session,
     exc,
     mapped_column,
@@ -222,8 +220,18 @@ class RoyalMailPaf(Base):
 
 class SimpleAddressColumnNames(enum.StrEnum):
     ID = "id"
+    HOUSE_NUM_OR_NAME = "house_num_or_name"
+    LINE_1 = "line_1"
+    LINE_2 = "line_2"
+    LINE_3 = "line_3"
+    LINE_4 = "line_4"
+    THOROUGHFARE_OR_DESC = "thoroughfare_or_desc"
+    TOWN_OR_CITY = "town_or_city"
+    LOCALITY = "locality"
+    COUNTY = "county"
+    COUNTRY = "country"
     POSTCODE = "postcode"
-    ADDRESS_TEXT = "address_text"
+    GET_ADDRESS_IO_ID = "get_address_io_id"
 
 
 class SimpleAddress(Base):
@@ -231,12 +239,64 @@ class SimpleAddress(Base):
     __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(primary_key=True, name=SimpleAddressColumnNames.ID)
+    house_num_or_name: Mapped[Optional[str]] = mapped_column(
+        String, name=SimpleAddressColumnNames.HOUSE_NUM_OR_NAME
+    )
+    line_1: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_1)
+    line_2: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_2)
+    line_3: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_3)
+    line_4: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_4)
+    thoroughfare_or_desc: Mapped[str] = mapped_column(
+        String, name=SimpleAddressColumnNames.THOROUGHFARE_OR_DESC
+    )
+    town_or_city: Mapped[str] = mapped_column(
+        String, name=SimpleAddressColumnNames.TOWN_OR_CITY
+    )
+    locality: Mapped[str] = mapped_column(
+        String, name=SimpleAddressColumnNames.LOCALITY
+    )
+    county: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.COUNTY)
+    country: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.COUNTRY)
+    get_address_io_id: Mapped[str] = mapped_column(
+        String, name=SimpleAddressColumnNames.GET_ADDRESS_IO_ID
+    )
     postcode = mapped_column(
         ForeignKey("ons_postcode.postcode"), name=SimpleAddressColumnNames.POSTCODE
     )
-    address_text = mapped_column(String, name=SimpleAddressColumnNames.ADDRESS_TEXT)
 
     def __repr__(self) -> str:
         return self._repr(
-            id=self.id, postcode=self.postcode, address_text=self.address_text
+            id=self.id,
+            postcode=self.postcode,
+            line_1=self.line_1,
+            line_2=self.line_2,
+            line_3=self.line_3,
+            line_4=self.line_4,
+            thoroughfare=self.thoroughfare,
+            town_or_city=self.town_or_city,
+            locality=self.locality,
+            county=self.county,
+            country=self.country,
+        )
+
+
+class PostcodeFetchedNames(enum.StrEnum):
+    ID = "id"
+    POSTCODE = "postcode"
+    WAS_FETCHED = "was_fetched"
+
+
+class PostcodeFetched(Base):
+    __tablename__ = "postcode_fetched"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(primary_key=True, name=PostcodeFetchedNames.ID)
+    postcode = mapped_column(
+        ForeignKey("ons_postcode.postcode"), name=PostcodeFetchedNames.POSTCODE
+    )
+    was_fetched = mapped_column(String, name=PostcodeFetchedNames.WAS_FETCHED)
+
+    def __repr__(self) -> str:
+        return self._repr(
+            id=self.id, postcode=self.postcode, was_fetched=self.was_fetched
         )

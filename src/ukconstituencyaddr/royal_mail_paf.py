@@ -1,6 +1,5 @@
 import enum
 import logging
-import pathlib
 from typing import List, Optional
 
 import numpy as np
@@ -91,7 +90,7 @@ class PafCsvParser:
             self.logger.info("Already parsed CSV file and placed into db")
             return
 
-        self.logger.info(f"Parsing PAF file")
+        self.logger.info("Parsing PAF file")
 
         def strip_spaces(x: str):
             return x.replace(" ", "")
