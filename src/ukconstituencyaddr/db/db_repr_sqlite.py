@@ -238,7 +238,9 @@ class SimpleAddress(Base):
     __tablename__ = "simple_addresses"
     __table_args__ = {"sqlite_autoincrement": True}
 
-    id: Mapped[int] = mapped_column(primary_key=True, name=SimpleAddressColumnNames.ID)
+    get_address_io_id: Mapped[str] = mapped_column(
+        String, name=SimpleAddressColumnNames.GET_ADDRESS_IO_ID, primary_key=True
+    )
     house_num_or_name: Mapped[Optional[str]] = mapped_column(
         String, name=SimpleAddressColumnNames.HOUSE_NUM_OR_NAME
     )
@@ -257,9 +259,6 @@ class SimpleAddress(Base):
     )
     county: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.COUNTY)
     country: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.COUNTRY)
-    get_address_io_id: Mapped[str] = mapped_column(
-        String, name=SimpleAddressColumnNames.GET_ADDRESS_IO_ID
-    )
     postcode = mapped_column(
         ForeignKey("ons_postcode.postcode"), name=SimpleAddressColumnNames.POSTCODE
     )
@@ -272,7 +271,7 @@ class SimpleAddress(Base):
             line_2=self.line_2,
             line_3=self.line_3,
             line_4=self.line_4,
-            thoroughfare=self.thoroughfare,
+            thoroughfare_or_desc=self.thoroughfare_or_desc,
             town_or_city=self.town_or_city,
             locality=self.locality,
             county=self.county,
@@ -281,18 +280,22 @@ class SimpleAddress(Base):
 
 
 class PostcodeFetchedNames(enum.StrEnum):
-    ID = "id"
     POSTCODE = "postcode"
     WAS_FETCHED = "was_fetched"
+    CONSTITUENCY_ID = "constituency_id"
 
 
 class PostcodeFetched(Base):
     __tablename__ = "postcode_fetched"
     __table_args__ = {"sqlite_autoincrement": True}
 
-    id: Mapped[int] = mapped_column(primary_key=True, name=PostcodeFetchedNames.ID)
     postcode = mapped_column(
-        ForeignKey("ons_postcode.postcode"), name=PostcodeFetchedNames.POSTCODE
+        ForeignKey("ons_postcode.postcode"),
+        primary_key=True,
+        name=PostcodeFetchedNames.POSTCODE,
+    )
+    constituency_id: Mapped[str] = mapped_column(
+        ForeignKey("ons_constituency.id"), name=PostcodeFetchedNames.CONSTITUENCY_ID
     )
     was_fetched = mapped_column(String, name=PostcodeFetchedNames.WAS_FETCHED)
 

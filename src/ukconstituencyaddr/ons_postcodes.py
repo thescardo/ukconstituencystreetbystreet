@@ -5,7 +5,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ukconstituencyaddr import ons_constituencies
-from ukconstituencyaddr.config import config
+from ukconstituencyaddr import config
 from ukconstituencyaddr.db import cacher
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
@@ -61,7 +61,7 @@ class PostcodeCsvParser:
         self,
         constituencies: ons_constituencies.ConstituencyCsvParser,
     ) -> None:
-        self.csv = config.input.ons_postcodes_csv
+        self.csv = config.config.input.ons_postcodes_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
@@ -137,10 +137,7 @@ class PostcodeCsvParser:
         )
 
     def clear_all(self):
-        session = Session(self.engine)
-        try:
+        with Session(self.engine) as session:
             session.query(db_repr.OnsPostcode).delete()
             session.commit()
             cacher.DbCacheInst.clear_file_modified(self.csv_name)
-        finally:
-            session.close()

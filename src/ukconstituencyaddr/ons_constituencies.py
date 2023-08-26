@@ -5,7 +5,7 @@ from typing import Dict, Optional
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from ukconstituencyaddr.config import config
+from ukconstituencyaddr import config
 from ukconstituencyaddr.db import cacher
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
@@ -19,7 +19,7 @@ class ConstituencyField(enum.IntEnum):
 
 class ConstituencyCsvParser:
     def __init__(self) -> None:
-        self.csv = config.input.ons_constituencies_csv
+        self.csv = config.config.input.ons_constituencies_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
@@ -106,10 +106,7 @@ class ConstituencyCsvParser:
             session.close()
 
     def clear_all(self):
-        session = Session(self.engine)
-        try:
+        with Session(self.engine) as session:
             session.query(db_repr.OnsConstituency).delete()
             session.commit()
             cacher.DbCacheInst.clear_file_modified(self.csv_name)
-        finally:
-            session.close()

@@ -1,15 +1,18 @@
+import argparse
 from contextlib import contextmanager
 from datetime import datetime
 import json
 from collections import deque
 from dataclasses import dataclass
-from http import HTTPStatus
+import multiprocessing
 import re
 import threading
 import time
 from typing import Deque, Dict, List, Optional, Tuple
 import logging
+import tqdm
 from urllib3.util.retry import Retry
+import concurrent.futures
 
 import requests
 from requests.status_codes import codes
@@ -24,10 +27,12 @@ PARTIAL_LOOKUP_MAX_NUM_ADDRESSES = 20
 
 MAX_FULL_ADDRESS_LOOKUPS_PER_DAY = 5000
 
-TEMPLATE = "{line_1}|{line_2}|{town_or_city}|{locality}|{county}|{country}"
+TEMPLATE = (
+    "{line_1}|{line_2}|{line_3}|{line_4}|{town_or_city}|{locality}|{county}|{country}"
+)
 
 GET_ADDRESS_IO_SUGGESTIONS_KEY = "suggestions"
-GET_ADDRESS_IO_LOCATION_KEY = "location"
+GET_ADDRESS_IO_ADDRESS_KEY = "address"
 GET_ADDRESS_IO_ID_KEY = "id"
 
 FIRST_20_ADDR_LOOKUP_DATA_FIELD = {
@@ -43,9 +48,9 @@ ALL_RESULTS = {
 
 
 def retry_session(
-    retries: int = 5,
+    retries: int = 20,
     session: Optional[requests.Session] = None,
-    backoff_factor: float = 0.3,
+    backoff_factor: float = 2.0,
 ):
     session = session or requests.Session()
     retry = Retry(
@@ -53,6 +58,8 @@ def retry_session(
         read=retries,
         connect=retries,
         backoff_factor=backoff_factor,
+        respect_retry_after_header=True,
+        status_forcelist=[429],
     )
     adapter = requests.adapters.HTTPAdapter(max_retries=retry)
     session.mount("http://", adapter)
@@ -80,11 +87,19 @@ def get_address_resp_for_postcode(
     else:
         params = FIRST_20_ADDR_LOOKUP_DATA_FIELD
 
-    response = requests.get(url=url, headers=headers, params=params)
-    if response.status_code == 200:
-        return response, json.loads(response.text)
-    else:
-        return response, None
+    current = 10
+    while True:
+        response = session.get(url=url, headers=headers, params=params)
+
+        match response.status_code:
+            case 200:
+                return response, json.loads(response.text)
+            case 429:
+                time.sleep(current)
+                current *= 1.5
+                continue
+            case _:
+                return response, None
 
 
 @dataclass
@@ -147,23 +162,22 @@ class NumAddressReqManager:
         self.logger.info(f"Usages limits are: {self._usages}")
 
     def request_and_decrement(self) -> bool:
-        with acquire_lock_timeout(self._lock) as locked:
+        with acquire_lock_timeout(self._lock, timeout=5) as locked:
             if locked:
                 # Check if we need to reset the number of lookups
                 time_now = datetime.now()
                 if self._last_date.date() != time_now.date():
                     self._usages = get_limit_for_day()
 
-                if self._usages.UsageToday > 0:
-                    self._usages.UsageToday -= 1
+                if self._usages.UsageToday < self._usages.DailyLimit:
+                    self._usages.UsageToday += 1
                     return True
-                elif self._usages.MonthlyBufferUsed > 0:
-                    self._usages.MonthlyBufferUsed -= 1
+                elif self._usages.MonthlyBufferUsed < self._usages.MonthlyBuffer:
+                    self._usages.MonthlyBufferUsed += 1
                     return True
                 else:
                     return False
             else:
-                self.logger.info("Failed to acquire lock within timeout!")
                 raise TimeoutError("Failed to acquire lock within timeout")
 
 
@@ -175,17 +189,33 @@ class Scraper:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.num_req_manger = NumAddressReqManager()
+        self._db_lock = threading.Lock()
 
         self.max_simultaneous_loops = 20
+        self.use_full_lookups = True
 
     def get_addresses_for_postcode(
-        self, http_sess: requests.Session, postcode: str
-    ) -> Tuple[int, bool]:
-        db_sess = Session(self.engine)
+        self,
+        ons_postcode: db_repr.OnsPostcode,
+        http_sess: Optional[requests.Session] = None,
+    ) -> Tuple[bool, bool]:
+        if http_sess is None:
+            http_sess = retry_session(backoff_factor=10)
 
-        # fetched = db_sess.query(db_repr.PostcodeFetched).where(db_repr.PostcodeFetched.postcode == postcode).one_or_none()
-        # if fetched is not None and fetched.was_fetched:
-        #     return 200, True
+        postcode = ons_postcode.postcode
+        address_deque: Deque[db_repr.SimpleAddress] = deque()
+
+        with Session(self.engine) as db_sess:
+            fetched = (
+                db_sess.query(db_repr.PostcodeFetched)
+                .where(db_repr.PostcodeFetched.postcode == postcode)
+                .one_or_none()
+            )
+
+        if fetched is not None and fetched.was_fetched:
+            self.logger.info(f"Already fetched addresses {postcode=}")
+            return 200, True
+        self.logger.info(f"Fetching addresses for {postcode=}")
 
         resp, parsed = get_address_resp_for_postcode(
             postcode=postcode, full_lookup=False, session=http_sess
@@ -196,51 +226,60 @@ class Scraper:
                 pass
             case 429, 503:
                 time.sleep(5)
-                return resp.reason, False
+                return True, False
             case _:
                 self.logger.error(f"Unhandled reason code {resp.reason}")
-                return resp.reason, False
+                return True, False
 
-        # if (
-        #     len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])
-        #     == FULL_ADDR_LIST_LOOKUP_DATA_FIELD
-        # ):
-        #     resp, parsed = get_address_resp_for_postcode(
-        #         http_sess, postcode=postcode, full_lookup=True
-        #     )
+        self.logger.debug(f"Got {len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])=}")
 
-        #     match resp.reason:
-        #         case HTTPStatus.OK:
-        #             pass
-        #         case HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE:
-        #             time.sleep(5)
-        #             return resp.reason, False
-        #         case _:
-        #             self.logger.error(f"Unhandled reason code {resp.reason}")
-        #             return resp.reason, False
+        num_addresses = len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])
+        if num_addresses == PARTIAL_LOOKUP_MAX_NUM_ADDRESSES:
+            if not self.use_full_lookups:
+                self.logger.debug(
+                    f"{self.use_full_lookups=} Not getting "
+                    f"all addresses for {postcode=}"
+                )
+                return False, False
 
-        self.logger.info(f"{parsed=}")
-        if (
-            len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])
-            == PARTIAL_LOOKUP_MAX_NUM_ADDRESSES
-        ):
-            return 200, False
+            if self.num_req_manger.request_and_decrement():
+                self.logger.debug(f"Need to get all addresses for {postcode=}")
+                resp, parsed = get_address_resp_for_postcode(
+                    postcode=postcode, full_lookup=True, session=http_sess
+                )
+
+                match resp.status_code:
+                    case 200:
+                        pass
+                    case 429, 503:
+                        time.sleep(5)
+                        return True, False
+                    case _:
+                        self.logger.error(f"Unhandled reason code {resp.reason}")
+                        return True, False
+            else:
+                self.logger.debug("NOT")
+                return False, False
+
+        self.logger.debug(
+            f"Got {len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])} addresses: {parsed}"
+        )
 
         for item in parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY]:
-            if GET_ADDRESS_IO_ID_KEY in item and GET_ADDRESS_IO_LOCATION_KEY in item:
+            if GET_ADDRESS_IO_ID_KEY in item and GET_ADDRESS_IO_ADDRESS_KEY in item:
                 get_address_io_id = item[GET_ADDRESS_IO_ID_KEY]
-                line_list = item[GET_ADDRESS_IO_LOCATION_KEY].split("|")
+                line_list = item[GET_ADDRESS_IO_ADDRESS_KEY].split("|")
                 line_1 = line_list[0]
 
-                num_match = re.search(r"^(\d+)\s*(.*)$", line_1)
+                num_match = re.search(r"^(\d+[a-zA-Z]{0,1})\s*(.*)$", line_1)
                 if num_match is None:
                     house_num_or_name = line_1
                     thoroughfare_or_desc = ""
                 else:
-                    house_num_or_name = int(num_match.group(1))
+                    house_num_or_name = num_match.group(1)
                     thoroughfare_or_desc = num_match.group(2)
 
-                db_sess.add(
+                address_deque.append(
                     db_repr.SimpleAddress(
                         postcode=postcode,
                         line_1=line_1,
@@ -248,7 +287,7 @@ class Scraper:
                         line_3=line_list[2],
                         line_4=line_list[3],
                         house_num_or_name=house_num_or_name,
-                        thoroughfare=thoroughfare_or_desc,
+                        thoroughfare_or_desc=thoroughfare_or_desc,
                         town_or_city=line_list[4],
                         locality=line_list[5],
                         county=line_list[6],
@@ -257,31 +296,72 @@ class Scraper:
                     )
                 )
 
-        db_sess.add(db_repr.PostcodeFetched(postcode=postcode, was_fetched=True))
-        db_sess.commit()
-        db_sess.close()
-        return resp.status_code, True
+        with Session(self.engine) as db_sess:
+            with self._db_lock:
+                db_sess.add_all(address_deque)
+                db_sess.add(
+                    db_repr.PostcodeFetched(
+                        postcode=postcode,
+                        constituency_id=ons_postcode.constituency_id,
+                        was_fetched=True,
+                    )
+                )
+                db_sess.commit()
+                return True, True
+
+    def scrape_for_constituency(self, constituency_name: str):
+        with Session(self.engine) as session:
+            results = (
+                session.query(db_repr.OnsPostcode)
+                .join(db_repr.OnsConstituency)
+                .where(db_repr.OnsConstituency.name == constituency_name)
+                .all()
+            )
+            if len(results) == 0:
+                raise ReferenceError("Need to have parsed ONS files to scrape data")
+
+            process = tqdm.tqdm(
+                total=len(results),
+                desc=f"Fetching addresses for postcodes in {constituency_name}",
+            )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                # Start the load operations and mark each future with its URL
+                get_fut = [
+                    executor.submit(
+                        self.get_addresses_for_postcode, ons_postcode=postcode
+                    )
+                    for postcode in results
+                ]
+
+                for _ in concurrent.futures.as_completed(get_fut):
+                    process.update(1)
 
     def scrape(self, constituencies_to_scrape: List[str]):
         self.logger.info(f"Scraping addresses for {constituencies_to_scrape}")
-        postcodes_to_search: Deque[str] = deque()
 
         with Session(self.engine) as session:
-            for constituency_name in constituencies_to_scrape:
-                results = (
-                    session.query(db_repr.OnsPostcode.postcode)
-                    .join(db_repr.OnsConstituency)
-                    .where(db_repr.OnsConstituency.name == constituency_name)
-                    .all()
-                )
-                for result in results:
-                    postcodes_to_search.append(result.tuple()[0])
+            start_num_addresses = session.query(db_repr.SimpleAddress).count()
 
-        self.logger.info(f"Make list of len {len(postcodes_to_search)} to scrape")
+        for constituency_name in constituencies_to_scrape:
+            self.scrape_for_constituency(constituency_name)
+
+        with Session(self.engine) as session:
+            end_num_addresses = session.query(db_repr.SimpleAddress).count()
+
+        new_addresses = end_num_addresses - start_num_addresses
+        self.logger.info(f"Scraped {new_addresses} new addresses")
 
 
 if __name__ == "__main__":
-    config.parse_config()
     config.init_loggers()
+    config.parse_config()
+
     x = Scraper()
-    x.get_addresses_for_postcode(retry_session(), "YO318JH")
+    with Session(db_repr.get_engine()) as session:
+        ons_postcode = (
+            session.query(db_repr.OnsPostcode)
+            .where(db_repr.OnsPostcode.postcode == "YO318JH")
+            .one()
+        )
+    x.get_addresses_for_postcode(retry_session(), ons_postcode)

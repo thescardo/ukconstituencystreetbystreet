@@ -3,7 +3,8 @@ import argparse
 import concurrent.futures
 import logging
 import multiprocessing
-from typing import Optional
+from typing import List, Optional
+import difflib
 
 import pandas as pd
 import tqdm
@@ -23,7 +24,7 @@ class ConstituencyInfoOutputter:
         self.constituency_parser = ons_constituencies.ConstituencyCsvParser()
         self.postcode_parser = ons_postcodes.PostcodeCsvParser(self.constituency_parser)
         # self.paf_parser = royal_mail_paf.PafCsvParser()
-        self.paf_scraper = scraper.Scraper()
+        self.street_scraper = scraper.Scraper()
 
         self.output_folder = config.config.output.output_folder
         self.output_folder.mkdir(parents=True, exist_ok=True)
@@ -54,8 +55,8 @@ class ConstituencyInfoOutputter:
                 raise
             process.update(1)
 
-    def scrape(self):
-        self.paf_scraper.parse_addresses_for_postcode("S25PX", scraper.TEST_DATA)
+    def scrape(self, constituency_names: List[str]):
+        self.street_scraper.scrape(constituency_names)
 
     def make_csv_streets_in_constituency(
         self,
@@ -63,9 +64,7 @@ class ConstituencyInfoOutputter:
         constituency_id: Optional[str] = None,
     ):
         assert constituency_id is not None or constituency_name is not None
-        session = Session(self.engine)
-
-        try:
+        with Session(self.engine) as session:
             if constituency_name is None:
                 constituency_name = self.constituency_parser.get_constituency(
                     constituency_id
@@ -98,8 +97,6 @@ class ConstituencyInfoOutputter:
             else:
                 dir = self.get_constituency_folder(constituency_name)
                 df.to_csv(str(dir / f"{constituency_name} Street Names.csv"))
-        finally:
-            session.close()
 
     def make_csv_addresses_in_constituency(
         self,
@@ -107,9 +104,7 @@ class ConstituencyInfoOutputter:
         constituency_id: Optional[str] = None,
     ):
         assert constituency_id is not None or constituency_name is not None
-        session = Session(self.engine)
-
-        try:
+        with Session(self.engine) as session:
             if constituency_name is None:
                 constituency_name = self.constituency_parser.get_constituency(
                     constituency_id
@@ -138,12 +133,9 @@ class ConstituencyInfoOutputter:
             else:
                 dir = self.get_constituency_folder(constituency_name)
                 df.to_csv(str(dir / f"{constituency_name} Addresses.csv"))
-        finally:
-            session.close()
 
     def make_csvs_for_all_constituencies(self):
-        session = Session(self.engine)
-        try:
+        with Session(self.engine) as session:
             all_constituencies = [
                 constituency.id
                 for constituency in session.query(db_repr.OnsConstituency).all()
@@ -164,8 +156,37 @@ class ConstituencyInfoOutputter:
                     )
                 )
             return results
-        finally:
-            session.close()
+
+    def get_similar_constituencies(self, search_term: str) -> List[str]:
+        with Session(self.engine) as session:
+            constituencies = list(session.query(db_repr.OnsConstituency).all())
+            constituency_names = [constituency.name for constituency in constituencies]
+
+            return difflib.get_close_matches(
+                search_term, constituency_names, n=5, cutoff=0.3
+            )
+
+    def percent_fetched_for_constituency(self, constituency_name: str) -> List[str]:
+        with Session(self.engine) as session:
+            num_postcodes_in_constituency = (
+                session.query(db_repr.OnsPostcode)
+                .join(db_repr.OnsConstituency)
+                .where(db_repr.OnsConstituency.name == constituency_name)
+                .count()
+            )
+            num_postcodes_fetched = (
+                session.query(db_repr.PostcodeFetched)
+                .join(db_repr.OnsConstituency)
+                .where(db_repr.OnsConstituency.name == constituency_name)
+                .count()
+            )
+            percent = (num_postcodes_fetched / num_postcodes_in_constituency) * 100
+
+            print_str = f"In {constituency_name}, {num_postcodes_in_constituency=}, {num_postcodes_fetched=}, {percent=}"
+            self.logger.info(
+                f"In {constituency_name}, {num_postcodes_in_constituency=}, {num_postcodes_fetched=}, {percent=}"
+            )
+            print(print_str)
 
 
 def output_csvs():
@@ -199,24 +220,31 @@ def output_csvs():
         "-s",
         "--scrape",
         action="store_true",
-        help="If specified, scrapes data from royal mail",
+        help="If specified, scrapes data from getaddress.io",
+    )
+    parser.add_argument(
+        "-n",
+        "--num_scraped",
+        action="store_true",
+        help="If specified, return percentage of fetched "
+        "postcodes from constituency argument",
     )
 
     args = parser.parse_args()
 
     if not args.init_config:
-        init_loggers()
+        config.init_loggers()
         config.parse_config()
 
         comb = ConstituencyInfoOutputter()
 
-        if not args.build_cache:
-            if args.scrape:
-                comb.scrape()
-                return
+        if args.num_scraped:
+            comb.percent_fetched_for_constituency(args.constituency)
+            return
 
+        if args.scrape:
+            comb.scrape([args.constituency])
+            return
+
+        if args.build_cache:
             comb.process_csvs()
-            if args.constituency is not None:
-                comb.make_csv_streets_in_constituency(args.constituency)
-            else:
-                comb.make_csvs_for_all_constituencies()
