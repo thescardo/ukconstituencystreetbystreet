@@ -14,6 +14,7 @@ from ukconstituencyaddr import (
     config,
     ons_constituencies,
     ons_postcodes,
+    os_opennames,
     scraper,
 )
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
@@ -22,8 +23,8 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 class ConstituencyInfoOutputter:
     def __init__(self) -> None:
         self.constituency_parser = ons_constituencies.ConstituencyCsvParser()
-        self.postcode_parser = ons_postcodes.PostcodeCsvParser(self.constituency_parser)
-        # self.paf_parser = royal_mail_paf.PafCsvParser()
+        self.postcode_parser = ons_postcodes.PostcodeCsvParser()
+        self.osopennames_parser = os_opennames.OsOpenNamesCsvsParser()
         self.street_scraper = scraper.Scraper()
 
         self.output_folder = config.config.output.output_folder
@@ -44,7 +45,7 @@ class ConstituencyInfoOutputter:
         return constituency_output
 
     def process_csvs(self):
-        parsers = [self.constituency_parser, self.postcode_parser]
+        parsers = [self.constituency_parser, self.postcode_parser, self.osopennames_parser]
         process = tqdm.tqdm(total=len(parsers), desc="Importing CSVs to local database")
         for x in parsers:
             try:

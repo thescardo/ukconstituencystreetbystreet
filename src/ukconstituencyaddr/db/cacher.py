@@ -18,6 +18,7 @@ class CsvName(enum.StrEnum):
     OnsConstituency = "ons_constituency_csv"
     OnsPostcode = "ons_postcode_csv"
     RoyalMailPaf = "royal_mail_paf_csv"
+    OsOpennamesRoad = "os_opennames_roads"
 
 
 class DbCache:

@@ -2,6 +2,7 @@ import enum
 import logging
 
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ukconstituencyaddr import ons_constituencies
@@ -59,14 +60,12 @@ class OnsPostcodeField(enum.StrEnum):
 class PostcodeCsvParser:
     def __init__(
         self,
-        constituencies: ons_constituencies.ConstituencyCsvParser,
     ) -> None:
         self.csv = config.config.input.ons_postcodes_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
         self.csv_name = cacher.CsvName.OnsPostcode
-        self.constituencies = constituencies
 
         self.engine = db_repr.get_engine()
 
@@ -114,21 +113,22 @@ class PostcodeCsvParser:
 
         rows.rename(
             columns={
-                OnsPostcodeField.POSTCODE: "postcode",
-                OnsPostcodeField.COUNTRY: "country_id",
-                OnsPostcodeField.REGION: "region_id",
-                OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY: "constituency_id",  # noqa: E501
-                OnsPostcodeField.ELECTORAL_WARD: "electoral_ward_id",
+                OnsPostcodeField.POSTCODE: db_repr.OnsPostcodeColumnNames.POSTCODE,
+                OnsPostcodeField.COUNTRY: db_repr.OnsPostcodeColumnNames.COUNTRY_ID,
+                OnsPostcodeField.REGION: db_repr.OnsPostcodeColumnNames.REGION_ID,
+                OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY: db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID,  # noqa: E501
+                OnsPostcodeField.ELECTORAL_WARD: db_repr.OnsPostcodeColumnNames.ELECTORAL_WARD_ID,
             },
             inplace=True,
         )
-        rows.dropna(subset=["constituency_id"], inplace=True)
+        rows.dropna(subset=[db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID], inplace=True)
+        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1)
         rows.to_sql(
             db_repr.OnsPostcode.__tablename__,
             self.engine,
             if_exists="append",
             index=False,
-            index_label="postcode",
+            index_label=db_repr.OnsPostcodeColumnNames.POSTCODE,
             chunksize=100000,
         )
 
@@ -136,8 +136,27 @@ class PostcodeCsvParser:
             f"Finished parsing ONS postcodes file, wrote {len(rows.index)} items"
         )
 
+    def add_postcode_district_to_add(self):
+        rows = pd.read_sql_table(db_repr.OnsPostcode.__tablename__, self.engine)
+        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1)
+        rows.to_sql(
+            db_repr.OnsPostcode.__tablename__,
+            self.engine,
+            if_exists="append",
+            index=False,
+            index_label=db_repr.OnsPostcodeColumnNames.POSTCODE,
+            chunksize=100000,
+        )
+
     def clear_all(self):
         with Session(self.engine) as session:
             session.query(db_repr.OnsPostcode).delete()
             session.commit()
             cacher.DbCacheInst.clear_file_modified(self.csv_name)
+
+if __name__ == "__main__":
+    config.init_loggers()
+    config.parse_config()
+
+    x = PostcodeCsvParser()
+    x.add_postcode_district_to_add()

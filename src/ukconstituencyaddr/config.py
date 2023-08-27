@@ -32,6 +32,7 @@ class InputConfig:
     royal_mail_paf_csv: pathlib.Path
     ons_constituencies_csv: pathlib.Path
     ons_postcodes_csv: pathlib.Path
+    os_openname_csv_folder: pathlib.Path
 
 
 @dataclass
@@ -110,6 +111,7 @@ def parse_config():
             ons_postcodes_csv=(
                 folder_for_csvs / input_conf["ons_postcodes_csv"]
             ).resolve(),
+            os_openname_csv_folder=pathlib.Path(input_conf["openname_csv_folder"]),
         ),
         output=OutputConfig(
             output_folder=pathlib.Path(output_conf["output_folder"]).resolve(),

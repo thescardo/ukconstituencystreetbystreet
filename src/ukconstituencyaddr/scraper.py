@@ -8,11 +8,12 @@ import multiprocessing
 import re
 import threading
 import time
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Set, Tuple
 import logging
 import tqdm
 from urllib3.util.retry import Retry
 import concurrent.futures
+import difflib
 
 import requests
 from requests.status_codes import codes
@@ -22,6 +23,9 @@ from sqlalchemy.orm import Session
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 from ukconstituencyaddr import config
 
+HOUSE_NUMBER_PATTERN = re.compile(
+    r"^(\d+[a-zA-Z]{0,1}\s{0,1}-{0,1}\s{0,1}\d+[a-zA-Z]{0,1})\s*(.*)$"
+)
 
 PARTIAL_LOOKUP_MAX_NUM_ADDRESSES = 20
 
@@ -269,25 +273,16 @@ class Scraper:
             if GET_ADDRESS_IO_ID_KEY in item and GET_ADDRESS_IO_ADDRESS_KEY in item:
                 get_address_io_id = item[GET_ADDRESS_IO_ID_KEY]
                 line_list = item[GET_ADDRESS_IO_ADDRESS_KEY].split("|")
-                line_1 = line_list[0]
-
-                num_match = re.search(r"^(\d+[a-zA-Z]{0,1})\s*(.*)$", line_1)
-                if num_match is None:
-                    house_num_or_name = line_1
-                    thoroughfare_or_desc = ""
-                else:
-                    house_num_or_name = num_match.group(1)
-                    thoroughfare_or_desc = num_match.group(2)
 
                 address_deque.append(
                     db_repr.SimpleAddress(
                         postcode=postcode,
-                        line_1=line_1,
+                        line_1=line_list[0],
                         line_2=line_list[1],
                         line_3=line_list[2],
                         line_4=line_list[3],
-                        house_num_or_name=house_num_or_name,
-                        thoroughfare_or_desc=thoroughfare_or_desc,
+                        house_num_or_name="",
+                        thoroughfare_or_desc="",
                         town_or_city=line_list[4],
                         locality=line_list[5],
                         county=line_list[6],
@@ -352,16 +347,53 @@ class Scraper:
         new_addresses = end_num_addresses - start_num_addresses
         self.logger.info(f"Scraped {new_addresses} new addresses")
 
+    def process_thoroughfares_for_postcode(self, postcode: str):
+        with Session(self.engine) as session:
+            try:
+                ons_postcode = (
+                    session.query(db_repr.OnsPostcode)
+                    .where(db_repr.OnsPostcode.postcode == postcode)
+                    .one()
+                )
+            except Exception as e:
+                raise Exception(f"Couldn't get {postcode=}") from e
+
+            addresses = ons_postcode.addresses
+            roads = [road.name for road in ons_postcode.roads]
+
+            # First pass
+            for address in addresses:
+                for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                    close_matches = difflib.get_close_matches(
+                        each_line, roads
+                    )
+                    
+                    if len(close_matches) != 0:
+                        address.thoroughfare_or_desc = close_matches[0]
+
+            session.commit()
+
+    def get_all_thoroughfares(self):
+        with Session(self.engine) as session:
+            distinct_postcodes: List[str] = [
+                row[0] for row in 
+                session.query(db_repr.SimpleAddress.postcode).distinct().all()
+            ]
+
+        self.logger.info(f"Found {len(distinct_postcodes)} distinct postcodes in addresses table")
+        process = tqdm.tqdm(
+            total=len(distinct_postcodes),
+            desc=f"Getting thoroughfares for all postcodes",
+        )
+
+        for postcode in distinct_postcodes:
+            self.process_thoroughfares_for_postcode(postcode)
+            process.update(1)
+
 
 if __name__ == "__main__":
     config.init_loggers()
     config.parse_config()
 
     x = Scraper()
-    with Session(db_repr.get_engine()) as session:
-        ons_postcode = (
-            session.query(db_repr.OnsPostcode)
-            .where(db_repr.OnsPostcode.postcode == "YO318JH")
-            .one()
-        )
-    x.get_addresses_for_postcode(retry_session(), ons_postcode)
+    x.get_all_thoroughfares()
