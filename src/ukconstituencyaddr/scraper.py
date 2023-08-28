@@ -2,7 +2,7 @@ import argparse
 from contextlib import contextmanager
 from datetime import datetime
 import json
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass
 import multiprocessing
 import re
@@ -10,6 +10,7 @@ import threading
 import time
 from typing import Deque, Dict, List, Optional, Set, Tuple
 import logging
+from sqlalchemy import select, update
 import tqdm
 from urllib3.util.retry import Retry
 import concurrent.futures
@@ -24,7 +25,10 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 from ukconstituencyaddr import config
 
 HOUSE_NUMBER_PATTERN = re.compile(
-    r"^(\d+[a-zA-Z]{0,1}\s{0,1}-{0,1}\s{0,1}\d+[a-zA-Z]{0,1})\s*(.*)$"
+    r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
+)
+LTD_PO_BOX_PATTERN = re.compile(
+    r'.*(ltd|po box).*', re.IGNORECASE
 )
 
 PARTIAL_LOOKUP_MAX_NUM_ADDRESSES = 20
@@ -198,6 +202,8 @@ class Scraper:
         self.max_simultaneous_loops = 20
         self.use_full_lookups = True
 
+        self.streets_per_postcode_district: Dict[str, Set[str]] = defaultdict(set)
+
     def get_addresses_for_postcode(
         self,
         ons_postcode: db_repr.OnsPostcode,
@@ -347,48 +353,137 @@ class Scraper:
         new_addresses = end_num_addresses - start_num_addresses
         self.logger.info(f"Scraped {new_addresses} new addresses")
 
-    def process_thoroughfares_for_postcode(self, postcode: str):
+    def process_thoroughfares_for_postcode(self, ons_postcode: db_repr.OnsPostcode):
         with Session(self.engine) as session:
-            try:
-                ons_postcode = (
-                    session.query(db_repr.OnsPostcode)
-                    .where(db_repr.OnsPostcode.postcode == postcode)
-                    .one()
-                )
-            except Exception as e:
-                raise Exception(f"Couldn't get {postcode=}") from e
+            session.add(ons_postcode)
 
             addresses = ons_postcode.addresses
-            roads = [road.name for road in ons_postcode.roads]
 
-            # First pass
+            if ons_postcode.postcode_district not in self.streets_per_postcode_district:
+                os_roads = session.query(db_repr.OsOpennameRoad).where(db_repr.OsOpennameRoad.postcode_district == ons_postcode.postcode_district).all()
+
+                roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
+                for os_road in os_roads:
+                    roads.add(os_road.name)
+            else:
+                roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
+
+            not_found_1st: Deque[db_repr.SimpleAddress] = deque()
+            road_names_found: Set[str] = set()
+
+            # First pass using difflib
             for address in addresses:
+                if len(address.thoroughfare_or_desc) > 0:
+                    road_names_found.add(address.thoroughfare_or_desc)
+                    continue
+
+                found_thoroughfare = False
+
                 for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
                     close_matches = difflib.get_close_matches(
-                        each_line, roads
+                        each_line, roads, cutoff=0.7
                     )
                     
                     if len(close_matches) != 0:
-                        address.thoroughfare_or_desc = close_matches[0]
+                        match = close_matches[0]
+                        address.thoroughfare_or_desc = match
+                        road_names_found.add(match)
+                        found_thoroughfare = True
+
+                if not found_thoroughfare:
+                    not_found_1st.append(address)
+
+            not_found_2nd: Deque[db_repr.SimpleAddress] = deque()
+
+            # Second pass if any road names were found for this postcode
+            for address in not_found_1st:
+                found_thoroughfare = False
+                for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                    for road_name in road_names_found:
+                        road_name_l = road_name.lower()
+
+                        if road_name_l in each_line.lower():
+                            address.thoroughfare_or_desc = road_name
+                            found_thoroughfare = True
+                            break
+
+                    if found_thoroughfare:
+                        break
+
+                if not found_thoroughfare:
+                    not_found_2nd.append(address)
+
+            not_found_3rd: Deque[db_repr.SimpleAddress] = deque()
+
+            # Third pass using slow regex
+            for address in not_found_2nd:
+                found_thoroughfare = False
+                for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                    house_match = re.match(HOUSE_NUMBER_PATTERN, each_line)
+
+                    if house_match is not None:
+                        street_group = house_match.group(2)
+
+                        # Exclude po box or ltd
+                        match = re.match(LTD_PO_BOX_PATTERN, street_group)
+
+                        if street_group is not None and match is None:
+                            address.thoroughfare_or_desc = street_group.strip()
+                            found_thoroughfare = True
+                            break
+
+                if not found_thoroughfare:
+                    not_found_3rd.append(address)
+
+            # Fourth pass, if anything is left over then we just use the last
+            # line number that isn't empty
+            for address in not_found_3rd:
+                lines = [address.line_4, address.line_3, address.line_2, address.line_1]
+                
+                for line in lines:
+                    if len(line) > 0:
+                        match = re.match(LTD_PO_BOX_PATTERN, line)
+
+                        if match is None:
+                            address.thoroughfare_or_desc = line
+                            break
+
+            # Finally, get house names or numbers using regex
+            for address in addresses:
+                # Attempt to get house number or name
+                house_match = re.match(HOUSE_NUMBER_PATTERN, address.line_1)
+
+                if house_match is not None:
+                    num_group = house_match.group(1)
+                    
+                    if num_group is not None:
+                        address.house_num_or_name = num_group
+                    else:
+                        address.house_num_or_name = address.line_1
+                else:
+                    address.house_num_or_name = address.line_1
 
             session.commit()
 
     def get_all_thoroughfares(self):
-        with Session(self.engine) as session:
-            distinct_postcodes: List[str] = [
-                row[0] for row in 
-                session.query(db_repr.SimpleAddress.postcode).distinct().all()
-            ]
+        try:
+            with Session(self.engine) as session:
+                distinct_postcodes = session.query(db_repr.OnsPostcode).join(db_repr.SimpleAddress).group_by(db_repr.SimpleAddress.postcode).all()
 
-        self.logger.info(f"Found {len(distinct_postcodes)} distinct postcodes in addresses table")
-        process = tqdm.tqdm(
-            total=len(distinct_postcodes),
-            desc=f"Getting thoroughfares for all postcodes",
-        )
+            self.logger.info(f"Found {len(distinct_postcodes)} distinct postcodes in addresses table")
+            process = tqdm.tqdm(
+                total=len(distinct_postcodes),
+                desc=f"Getting thoroughfares for all postcodes",
+            )
 
-        for postcode in distinct_postcodes:
-            self.process_thoroughfares_for_postcode(postcode)
-            process.update(1)
+            for postcode in distinct_postcodes:
+                self.process_thoroughfares_for_postcode(postcode)
+                process.update(1)
+        except Exception:
+            with Session(self.engine) as session:
+                update(db_repr.SimpleAddress).values(house_num_or_name='')
+                update(db_repr.SimpleAddress).values(thoroughfare_or_desc='')
+                session.commit()
 
 
 if __name__ == "__main__":
