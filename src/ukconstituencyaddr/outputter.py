@@ -74,7 +74,7 @@ class ConstituencyInfoOutputter:
             base_query = (
                 session.query(db_repr.SimpleAddress)
                 .join(db_repr.OnsPostcode)
-                .join(db_repr.OnsConstituency)
+                .join(db_repr.OnsConstituency).where(db_repr.SimpleAddress.thoroughfare_or_desc != None).where(db_repr.SimpleAddress.thoroughfare_or_desc != "")
             )
 
             if constituency_id is not None:
@@ -114,8 +114,8 @@ class ConstituencyInfoOutputter:
             base_query = (
                 session.query(db_repr.SimpleAddress)
                 .join(db_repr.OnsPostcode)
-                .join(db_repr.OnsConstituency)
-            ).filter(db_repr.SimpleAddress.thoroughfare_or_desc != None or len(db_repr.SimpleAddress.thoroughfare_or_desc) > 0)
+                .join(db_repr.OnsConstituency).where(db_repr.SimpleAddress.thoroughfare_or_desc != None).where(db_repr.SimpleAddress.thoroughfare_or_desc != "")
+            )
 
             if constituency_id is not None:
                 final_query = base_query.filter(

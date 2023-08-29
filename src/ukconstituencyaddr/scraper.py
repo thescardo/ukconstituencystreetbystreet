@@ -28,7 +28,11 @@ HOUSE_NUMBER_PATTERN = re.compile(
     r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-/]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
 )
 LTD_PO_BOX_PATTERN = re.compile(
-    r'.*(ltd|po box).*', re.IGNORECASE
+    r'.*(ltd|po box|plc).*', re.IGNORECASE
+)
+
+PO_BOX_PATTERN = re.compile(
+    r'.*(po box).*', re.IGNORECASE
 )
 
 PARTIAL_LOOKUP_MAX_NUM_ADDRESSES = 20
@@ -202,6 +206,7 @@ class Scraper:
         self.max_simultaneous_loops = 20
         self.use_full_lookups = True
 
+        self._dict_lock = threading.Lock()
         self.streets_per_postcode_district: Dict[str, Set[str]] = defaultdict(set)
 
     def get_addresses_for_postcode(
@@ -359,14 +364,15 @@ class Scraper:
 
             addresses = ons_postcode.addresses
 
-            if ons_postcode.postcode_district not in self.streets_per_postcode_district:
-                os_roads = session.query(db_repr.OsOpennameRoad).where(db_repr.OsOpennameRoad.postcode_district == ons_postcode.postcode_district).all()
+            with self._dict_lock:
+                if ons_postcode.postcode_district not in self.streets_per_postcode_district:
+                    os_roads = session.query(db_repr.OsOpennameRoad).where(db_repr.OsOpennameRoad.postcode_district == ons_postcode.postcode_district).all()
 
-                roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
-                for os_road in os_roads:
-                    roads.add(os_road.name)
-            else:
-                roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
+                    roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
+                    for os_road in os_roads:
+                        roads.add(os_road.name)
+                else:
+                    roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
 
             not_found_1st: Deque[db_repr.SimpleAddress] = deque()
             road_names_found: Set[str] = set()
@@ -380,8 +386,14 @@ class Scraper:
                 found_thoroughfare = False
 
                 for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                    po_box_match = re.match(PO_BOX_PATTERN, each_line)
+                    if po_box_match is not None:
+                        # Mark it as found, its a po box so we don't care
+                        found_thoroughfare = True
+                        break
+
                     close_matches = difflib.get_close_matches(
-                        each_line, roads, cutoff=0.7
+                        each_line, roads, cutoff=0.9
                     )
                     
                     if len(close_matches) != 0:
@@ -450,20 +462,24 @@ class Scraper:
 
             # Finally, get house names or numbers using regex
             for address in addresses:
-                # Attempt to get house number or name
-                house_match = re.match(HOUSE_NUMBER_PATTERN, address.line_1)
+                if address.thoroughfare_or_desc.lower() not in address.line_1.lower():
+                    address.house_num_or_name = address.line_1
+                else:
+                    # Attempt to get house number or name
+                    house_match = re.match(HOUSE_NUMBER_PATTERN, address.line_1)
 
-                if house_match is not None:
-                    num_group = house_match.group(1)
-                    
-                    if num_group is not None:
-                        address.house_num_or_name = num_group
+                    if house_match is not None:
+                        num_group = house_match.group(1)
+
+                        if num_group is not None:
+                            address.house_num_or_name = num_group
+                        else:
+                            address.house_num_or_name = address.line_1
                     else:
                         address.house_num_or_name = address.line_1
-                else:
-                    address.house_num_or_name = address.line_1
 
-            session.commit()
+            with self._db_lock:
+                session.commit()
 
     def get_all_thoroughfares(self):
         try:
@@ -473,7 +489,7 @@ class Scraper:
             self.logger.info(f"Found {len(distinct_postcodes)} distinct postcodes in addresses table")
             process = tqdm.tqdm(
                 total=len(distinct_postcodes),
-                desc=f"Getting thoroughfares for all postcodes",
+                desc="Getting thoroughfares for all postcodes",
             )
 
             for postcode in distinct_postcodes:
