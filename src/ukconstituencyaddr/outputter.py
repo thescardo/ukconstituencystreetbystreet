@@ -72,7 +72,7 @@ class ConstituencyInfoOutputter:
                 ).name
 
             base_query = (
-                session.query(db_repr.RoyalMailPaf)
+                session.query(db_repr.SimpleAddress)
                 .join(db_repr.OnsPostcode)
                 .join(db_repr.OnsConstituency)
             )
@@ -87,8 +87,8 @@ class ConstituencyInfoOutputter:
                 )
 
             final_query = mid_query.distinct(
-                db_repr.RoyalMailPaf.thoroughfare_and_desc
-            ).with_entities(db_repr.RoyalMailPaf.thoroughfare_and_desc)
+                db_repr.SimpleAddress.thoroughfare_or_desc
+            ).with_entities(db_repr.SimpleAddress.thoroughfare_or_desc)
 
             df = pd.read_sql(final_query.selectable, self.engine)
             if len(df.index) == 0:
@@ -112,10 +112,10 @@ class ConstituencyInfoOutputter:
                 ).name
 
             base_query = (
-                session.query(db_repr.RoyalMailPaf)
+                session.query(db_repr.SimpleAddress)
                 .join(db_repr.OnsPostcode)
                 .join(db_repr.OnsConstituency)
-            )
+            ).filter(db_repr.SimpleAddress.thoroughfare_or_desc != None or len(db_repr.SimpleAddress.thoroughfare_or_desc) > 0)
 
             if constituency_id is not None:
                 final_query = base_query.filter(
@@ -249,3 +249,7 @@ def output_csvs():
 
         if args.build_cache:
             comb.process_csvs()
+
+        if args.constituency:
+            comb.make_csv_streets_in_constituency(constituency_name=args.constituency)
+            comb.make_csv_addresses_in_constituency(constituency_name=args.constituency)

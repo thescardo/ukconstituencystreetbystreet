@@ -25,7 +25,7 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 from ukconstituencyaddr import config
 
 HOUSE_NUMBER_PATTERN = re.compile(
-    r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
+    r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-/]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
 )
 LTD_PO_BOX_PATTERN = re.compile(
     r'.*(ltd|po box).*', re.IGNORECASE
