@@ -1,3 +1,9 @@
+"""
+Imports ONS postcode data and pushes it into the configured database.
+
+See https://geoportal.statistics.gov.uk/. This module parses National Statistics Postcode Lookup (NSPL) - 2021 Census (February 2024) data.
+"""
+
 import enum
 import logging
 
@@ -12,6 +18,7 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 
 class OnsPostcodeField(enum.StrEnum):
+    """Enum to match fields to headers in the CSV"""
     POSTCODE = "pcd"
     POSTCODE_2 = "pcd2"
     POSTCODE_VAR = "pcds"
@@ -58,6 +65,8 @@ class OnsPostcodeField(enum.StrEnum):
 
 
 class PostcodeCsvParser:
+    """Reads ONS Postcode CSV data into the database"""
+
     def __init__(
         self,
     ) -> None:
@@ -74,6 +83,7 @@ class PostcodeCsvParser:
         self.logger.info(f"Using CSV {self.csv}")
 
     def process_csv(self):
+        """Reads the CSV into the database"""
         modified = cacher.DbCacheInst.check_and_set_file_modified(
             self.csv_name, self.csv
         )
@@ -149,6 +159,7 @@ class PostcodeCsvParser:
         )
 
     def clear_all(self):
+        """Clears all rows from the ONS postcodes table"""
         with Session(self.engine) as session:
             session.query(db_repr.OnsPostcode).delete()
             session.commit()

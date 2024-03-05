@@ -1,3 +1,9 @@
+"""
+Imports ONS constituency data and pushes it into the configured database.
+
+See https://geoportal.statistics.gov.uk/. This module parses Westminster Parliamentary Constituencies data from 2022
+"""
+
 import enum
 import logging
 from typing import Dict, Optional
@@ -18,6 +24,7 @@ class ConstituencyField(enum.IntEnum):
 
 
 class ConstituencyCsvParser:
+    """Parses the ONS constituency CSV and writes it to the database"""
     def __init__(self) -> None:
         self.csv = config.config.input.ons_constituencies_csv
         if not self.csv.exists():
@@ -34,6 +41,7 @@ class ConstituencyCsvParser:
         self.logger.info(f"Using CSV {self.csv}")
 
     def process_csv(self):
+        """Reads the CSV into the database"""
         modified = cacher.DbCacheInst.check_and_set_file_modified(
             self.csv_name, self.csv
         )
@@ -66,6 +74,10 @@ class ConstituencyCsvParser:
     def get_constituency(
         self, constituency_id: str
     ) -> Optional[db_repr.OnsConstituency]:
+        """
+        Returns the constituency specified by the ID
+        (which is defined by the ONS) if it exists
+        """
         session = Session(self.engine)
         try:
             if len(constituency_id) == 0:
@@ -85,6 +97,7 @@ class ConstituencyCsvParser:
     def get_constituency_by_name(
         self, constituency_name: str
     ) -> Optional[db_repr.OnsConstituency]:
+        """Returns the constituency by name if it exists. Only performs exact matches."""
         session = Session(self.engine)
         try:
             if len(constituency_name) == 0:
@@ -106,6 +119,7 @@ class ConstituencyCsvParser:
             session.close()
 
     def clear_all(self):
+        """Deletes all rows in the ONS constituencies table"""
         with Session(self.engine) as session:
             session.query(db_repr.OnsConstituency).delete()
             session.commit()

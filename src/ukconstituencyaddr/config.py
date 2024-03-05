@@ -1,13 +1,18 @@
+"""
+Module to allow configuration of this program
+"""
+
 import configparser
 import logging
 import pathlib
 from dataclasses import dataclass
 
+# Create a default folder
 MAIN_STORAGE_FOLDER = pathlib.Path("streetcheck_storage").absolute().resolve()
 CONFIG_FILE = MAIN_STORAGE_FOLDER / "config.ini"
 
 config_parser = configparser.ConfigParser()
-config: "ConfigClass"
+config: "RootConfigClass"
 
 
 def init_loggers():
@@ -28,6 +33,7 @@ def init_loggers():
 
 @dataclass
 class InputConfig:
+    """Input file locations configuration"""
     folders_for_csv: pathlib.Path
     royal_mail_paf_csv: pathlib.Path
     ons_constituencies_csv: pathlib.Path
@@ -37,27 +43,32 @@ class InputConfig:
 
 @dataclass
 class OutputConfig:
+    """Output folder locations configuration"""
     output_folder: pathlib.Path
     use_subfolders: bool
 
 
 @dataclass
-class ScrapingConfig:
+class AddressDownloadConfig:
+    """Config to download address data from getaddress.io"""
     get_address_io_api_key: str
     get_address_io_admin_key: str
 
 
 @dataclass
-class ConfigClass:
+class RootConfigClass:
+    """Root container for all config for easy of access to rest of the program"""
     input: InputConfig
     output: OutputConfig
-    scraping: ScrapingConfig
+    scraping: AddressDownloadConfig
 
 
 def parse_config():
+    """Reads config from file and puts it into ConfigClass"""
     MAIN_STORAGE_FOLDER.mkdir(parents=True, exist_ok=True)
 
     if CONFIG_FILE.exists():
+        # Read config if it exists and is a file
         if not CONFIG_FILE.is_file():
             raise Exception(
                 "Config file for this program has been "
@@ -66,6 +77,8 @@ def parse_config():
 
         config_parser.read(CONFIG_FILE)
     else:
+        # Otherwise fill the config with defaults and write it to the default
+        # config location
         config_parser["INPUT"] = {
             "folder_for_csvs": "",
             "royal_mail_paf_csv": "CSV PAF.csv",
@@ -92,14 +105,17 @@ def parse_config():
     output_conf = config_parser["OUTPUT"]
     scraping_conf = config_parser["SCRAPING"]
 
+    # Convert if necessary to pathlip.Path
     folder_for_csvs_raw = input_conf["folder_for_csvs"]
     if folder_for_csvs_raw is None or len(folder_for_csvs_raw) == 0:
         folder_for_csvs = pathlib.Path("").resolve()
     else:
         folder_for_csvs = pathlib.Path(folder_for_csvs_raw).resolve()
 
+    # Read all config and convert it to correct types for easy of use in the
+    # rest of the program
     global config
-    config = ConfigClass(
+    config = RootConfigClass(
         input=InputConfig(
             folders_for_csv=folder_for_csvs,
             royal_mail_paf_csv=(
@@ -117,7 +133,7 @@ def parse_config():
             output_folder=pathlib.Path(output_conf["output_folder"]).resolve(),
             use_subfolders=output_conf.getboolean("use_subfolders"),
         ),
-        scraping=ScrapingConfig(
+        scraping=AddressDownloadConfig(
             get_address_io_api_key=scraping_conf["get_address_io_api_key"],
             get_address_io_admin_key=scraping_conf["get_address_io_admin_key"],
         ),
