@@ -5,27 +5,30 @@ import logging
 import multiprocessing
 from typing import List, Optional
 import difflib
+import pathlib
 
 import pandas as pd
 import tqdm
 from sqlalchemy.orm import Session
 
 from ukconstituencyaddr import (
+    address_fetcher,
     config,
     ons_constituencies,
     ons_postcodes,
     os_opennames,
-    scraper,
 )
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 
 class ConstituencyInfoOutputter:
+    """Class that outputs csvs of addresses based on a constituency or other desired attribute"""
+
     def __init__(self) -> None:
         self.constituency_parser = ons_constituencies.ConstituencyCsvParser()
         self.postcode_parser = ons_postcodes.PostcodeCsvParser()
         self.osopennames_parser = os_opennames.OsOpenNamesCsvsParser()
-        self.street_scraper = scraper.Scraper()
+        self.street_fetcher = address_fetcher.AddrFetcher()
 
         self.output_folder = config.config.output.output_folder
         self.output_folder.mkdir(parents=True, exist_ok=True)
@@ -35,7 +38,8 @@ class ConstituencyInfoOutputter:
 
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def get_constituency_folder(self, constituency_name: str):
+    def get_constituency_folder(self, constituency_name: str) -> pathlib.Path:
+        """Returns the Path of the given constituency"""
         if self.use_subfolders:
             constituency_output = self.output_folder / constituency_name
             constituency_output.mkdir(parents=True, exist_ok=True)
@@ -45,6 +49,10 @@ class ConstituencyInfoOutputter:
         return constituency_output
 
     def process_csvs(self):
+        """
+        Parses all CSVs that are required to map constituencies
+        and other information onto a given address
+        """
         parsers = [self.constituency_parser, self.postcode_parser, self.osopennames_parser]
         process = tqdm.tqdm(total=len(parsers), desc="Importing CSVs to local database")
         for x in parsers:
@@ -56,14 +64,16 @@ class ConstituencyInfoOutputter:
                 raise
             process.update(1)
 
-    def scrape(self, constituency_names: List[str]):
-        self.street_scraper.scrape(constituency_names)
+    def fetch_addresses_in_constituency(self, constituency_names: List[str]):
+        """Downloads all address data for the given constituency names"""
+        self.street_fetcher.fetch(constituency_names)
 
     def make_csv_streets_in_constituency(
         self,
         constituency_name: Optional[str] = None,
         constituency_id: Optional[str] = None,
     ):
+        """Make CSV of all streets in a given constituency"""
         assert constituency_id is not None or constituency_name is not None
         with Session(self.engine) as session:
             if constituency_name is None:
@@ -104,6 +114,7 @@ class ConstituencyInfoOutputter:
         constituency_name: Optional[str] = None,
         constituency_id: Optional[str] = None,
     ):
+        """Make CSV of all addresses in a given constituency"""
         assert constituency_id is not None or constituency_name is not None
         with Session(self.engine) as session:
             if constituency_name is None:
@@ -136,6 +147,10 @@ class ConstituencyInfoOutputter:
                 df.to_csv(str(dir / f"{constituency_name} Addresses.csv"))
 
     def make_csvs_for_all_constituencies(self):
+        """
+        For all constituencies in the database, make a CSV of
+        addresses in each constituency
+        """
         with Session(self.engine) as session:
             all_constituencies = [
                 constituency.id
@@ -159,6 +174,7 @@ class ConstituencyInfoOutputter:
             return results
 
     def get_similar_constituencies(self, search_term: str) -> List[str]:
+        """Returns constituencies that match the name of the search term"""
         with Session(self.engine) as session:
             constituencies = list(session.query(db_repr.OnsConstituency).all())
             constituency_names = [constituency.name for constituency in constituencies]
@@ -167,7 +183,11 @@ class ConstituencyInfoOutputter:
                 search_term, constituency_names, n=5, cutoff=0.3
             )
 
-    def percent_fetched_for_constituency(self, constituency_name: str) -> List[str]:
+    def percent_fetched_for_constituency(self, constituency_name: str):
+        """
+        Prints the percentage of postcode areas that address data
+        has been fetched for in a given constituency
+        """
         with Session(self.engine) as session:
             num_postcodes_in_constituency = (
                 session.query(db_repr.OnsPostcode)
@@ -244,7 +264,7 @@ def output_csvs():
             return
 
         if args.scrape:
-            comb.scrape([args.constituency])
+            comb.fetch_addresses_in_constituency([args.constituency])
             return
 
         if args.build_cache:

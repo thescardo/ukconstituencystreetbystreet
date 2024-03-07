@@ -1,3 +1,9 @@
+"""
+Imports OS Open Names data and pushes it into the configured database.
+
+See https://osdatahub.os.uk/downloads/open/OpenNames, 'A comprehensive dataset of place names, roads numbers and postcodes for Great Britain.'
+"""
+
 import enum
 import logging
 import pathlib
@@ -13,6 +19,7 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 
 class OsOpennamesFields(enum.StrEnum):
+    """Enum to match fields to headers in the CSV"""
     ID = "ID"
     NAMES_URI = "NAMES_URI"
     NAME1 = "NAME1"
@@ -50,6 +57,8 @@ class OsOpennamesFields(enum.StrEnum):
 
 
 class OsOpenNamesCsvsParser:
+    """Reads OS Opennames CSV data into the database"""
+
     def __init__(
         self,
     ) -> None:
@@ -69,6 +78,7 @@ class OsOpenNamesCsvsParser:
         self.logger.info(f"Using CSV folder {self.csv_folder}")
 
     def process_csv(self):
+        """Reads the CSV into the database"""
         modified = cacher.DbCacheInst.check_and_set_file_modified(
             self.csv_name, self.csv_folder
         )
@@ -124,6 +134,7 @@ class OsOpenNamesCsvsParser:
         )
 
     def clear_all(self):
+        """Clears all rows from OS open names table"""
         with Session(self.engine) as session:
             session.query(db_repr.OnsPostcode).delete()
             session.commit()

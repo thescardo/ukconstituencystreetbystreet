@@ -1,3 +1,11 @@
+"""
+Tools to import use ONS data to get addresses in a postcode that match up to a given constituency.
+
+Uses the getaddress.io API.
+
+The Royal Mail and OS map databases also match up with the data specified above, but because of private investors the actual address data to match up with the postcodes is not free despite being mostly created by a (at the time) public entity. See https://en.wikipedia.org/wiki/Postcode_Address_File
+"""
+
 import argparse
 from contextlib import contextmanager
 from datetime import datetime
@@ -59,11 +67,14 @@ ALL_RESULTS = {
 }
 
 
-def retry_session(
+def get_retry_session(
     retries: int = 20,
     session: Optional[requests.Session] = None,
     backoff_factor: float = 2.0,
 ):
+    """
+    Returns a session that will retry many times with backoff. It's not intelligent but it will work if your internet is consistent.
+    """
     session = session or requests.Session()
     retry = Retry(
         total=retries,
@@ -84,16 +95,27 @@ def get_address_resp_for_postcode(
     full_lookup: bool,
     session: Optional[requests.Session] = None,
 ) -> Tuple[requests.Response, Optional[Dict[str, Dict]]]:
+    """
+    Returns a requests.Response object for a given postcode lookup
+
+    Args:
+        postcode: postcode to lookup
+        full_lookup: if False, only returns the first 20 results, if True
+            returns the full address information (which may be less than 20)
+        session: requests.Session required
+    """
     if len(postcode) < 5:
         raise ValueError("Postcodes must be 5 characters or longer")
 
     if session is None:
-        session = retry_session()
+        session = get_retry_session()
 
     api_key = config.config.scraping.get_address_io_api_key
 
     url = f"https://api.getAddress.io/autocomplete/{postcode}?api-key={api_key}"
     headers = {"content-type": "application/json"}
+
+    # Only do the full lookup when requested
     if full_lookup:
         params = ALL_RESULTS
     else:
@@ -116,6 +138,7 @@ def get_address_resp_for_postcode(
 
 @dataclass
 class UsageCounts:
+    """Store how much of the daily/monthly limits of getaddress.io we've used"""
     UsageToday: int
     DailyLimit: int
     MonthlyBuffer: int
@@ -123,8 +146,9 @@ class UsageCounts:
 
 
 def get_limit_for_day(session: Optional[requests.Session] = None) -> UsageCounts:
+    """Returns the daily/monthly getaddress.io counts we've used"""
     if session is None:
-        session = retry_session()
+        session = get_retry_session()
 
     DEFAULT_USAGE = UsageCounts(0, 5000, 500, 0)
 
@@ -154,6 +178,10 @@ def get_limit_for_day(session: Optional[requests.Session] = None) -> UsageCounts
 
 @contextmanager
 def acquire_lock_timeout(lock: threading.Lock, timeout: float):
+    """
+    Acquire a lock with timeout. This doesn't really ensure safe
+    running but at least makes the program finish quickly.
+    """
     result = lock.acquire(timeout=timeout)
     try:
         yield result
@@ -163,6 +191,7 @@ def acquire_lock_timeout(lock: threading.Lock, timeout: float):
 
 
 class NumAddressReqManager:
+    """Manages the usage limits for getaddress.io"""
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self._lock = threading.Lock()
@@ -193,7 +222,9 @@ class NumAddressReqManager:
                 raise TimeoutError("Failed to acquire lock within timeout")
 
 
-class Scraper:
+class AddrFetcher:
+    """Fetches addresses from getaddress.io by constituency."""
+
     def __init__(self) -> None:
         self.engine = db_repr.get_engine()
         db_repr.Base.metadata.create_all(bind=self.engine)
@@ -214,8 +245,9 @@ class Scraper:
         ons_postcode: db_repr.OnsPostcode,
         http_sess: Optional[requests.Session] = None,
     ) -> Tuple[bool, bool]:
+        """Gets addresses for the given postcode"""
         if http_sess is None:
-            http_sess = retry_session(backoff_factor=10)
+            http_sess = get_retry_session(backoff_factor=10)
 
         postcode = ons_postcode.postcode
         address_deque: Deque[db_repr.SimpleAddress] = deque()
@@ -249,8 +281,13 @@ class Scraper:
         self.logger.debug(f"Got {len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])=}")
 
         num_addresses = len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])
+
+        # Check if we've got exactly 20 addresses in the returned data.
+        # If so, the given postcode has *AT LEAST* 20 addresses, so we
+        # should do a full lookup.
         if num_addresses == PARTIAL_LOOKUP_MAX_NUM_ADDRESSES:
             if not self.use_full_lookups:
+                # Only should be reached in a special debug mode
                 self.logger.debug(
                     f"{self.use_full_lookups=} Not getting "
                     f"all addresses for {postcode=}"
@@ -280,6 +317,7 @@ class Scraper:
             f"Got {len(parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY])} addresses: {parsed}"
         )
 
+        # Now simply parse into a local representation to save to the database
         for item in parsed[GET_ADDRESS_IO_SUGGESTIONS_KEY]:
             if GET_ADDRESS_IO_ID_KEY in item and GET_ADDRESS_IO_ADDRESS_KEY in item:
                 get_address_io_id = item[GET_ADDRESS_IO_ID_KEY]
@@ -302,6 +340,7 @@ class Scraper:
                     )
                 )
 
+        # Write to the database and commit
         with Session(self.engine) as db_sess:
             with self._db_lock:
                 db_sess.add_all(address_deque)
@@ -315,7 +354,11 @@ class Scraper:
                 db_sess.commit()
                 return True, True
 
-    def scrape_for_constituency(self, constituency_name: str):
+    def fetch_for_constituency(self, constituency_name: str):
+        """
+        Fetch all addresses for the given consistency by downloading
+        all addresses in a given postcode that are in the given constituency
+        """
         with Session(self.engine) as session:
             results = (
                 session.query(db_repr.OnsPostcode)
@@ -331,6 +374,8 @@ class Scraper:
                 desc=f"Fetching addresses for postcodes in {constituency_name}",
             )
 
+            # Use a threadpool so that we can see the progress in the terminal
+            # by using tqdm in the main thread
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 # Start the load operations and mark each future with its URL
                 get_fut = [
@@ -343,14 +388,15 @@ class Scraper:
                 for _ in concurrent.futures.as_completed(get_fut):
                     process.update(1)
 
-    def scrape(self, constituencies_to_scrape: List[str]):
+    def fetch(self, constituencies_to_scrape: List[str]):
+        """Fetch all addresses for each consituency specified"""
         self.logger.info(f"Scraping addresses for {constituencies_to_scrape}")
 
         with Session(self.engine) as session:
             start_num_addresses = session.query(db_repr.SimpleAddress).count()
 
         for constituency_name in constituencies_to_scrape:
-            self.scrape_for_constituency(constituency_name)
+            self.fetch_for_constituency(constituency_name)
 
         with Session(self.engine) as session:
             end_num_addresses = session.query(db_repr.SimpleAddress).count()
@@ -358,12 +404,25 @@ class Scraper:
         new_addresses = end_num_addresses - start_num_addresses
         self.logger.info(f"Scraped {new_addresses} new addresses")
 
-    def process_thoroughfares_for_postcode(self, ons_postcode: db_repr.OnsPostcode):
+    def cleanup_addresses_for_postcode(self, ons_postcode: db_repr.OnsPostcode):
+        """
+        Performs parsing and clean up of 'thoroughfares' attribute of all addresses
+        in a given postcode so that we can guess the house name or number, as well as
+        removing PO boxes and the like. If a street name isn't found then don't mess
+        with the address.
+
+        This is a pretty inefficient algorithm but since it is only used once per
+        constituency we can live with it for the sake of having a relatively simple
+        to understand method for clean up of address data.
+        """
         with Session(self.engine) as session:
             session.add(ons_postcode)
 
             addresses = ons_postcode.addresses
 
+            # Fetch all roads that are in the given Postcode from the database. This
+            # is done lazily so that we only fetch roads in a given postcode when we
+            # need them.
             with self._dict_lock:
                 if ons_postcode.postcode_district not in self.streets_per_postcode_district:
                     os_roads = session.query(db_repr.OsOpennameRoad).where(db_repr.OsOpennameRoad.postcode_district == ons_postcode.postcode_district).all()
@@ -386,12 +445,14 @@ class Scraper:
                 found_thoroughfare = False
 
                 for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                    # First remove PO boxes, completely useless to us.
                     po_box_match = re.match(PO_BOX_PATTERN, each_line)
                     if po_box_match is not None:
                         # Mark it as found, its a po box so we don't care
                         found_thoroughfare = True
                         break
 
+                    # If the road name matches any of
                     close_matches = difflib.get_close_matches(
                         each_line, roads, cutoff=0.9
                     )
@@ -448,7 +509,7 @@ class Scraper:
                     not_found_3rd.append(address)
 
             # Fourth pass, if anything is left over then we just use the last
-            # line number that isn't empty
+            # line number that isn't empty as the thoroughfare
             for address in not_found_3rd:
                 lines = [address.line_4, address.line_3, address.line_2, address.line_1]
                 
@@ -460,7 +521,8 @@ class Scraper:
                             address.thoroughfare_or_desc = line
                             break
 
-            # Finally, get house names or numbers using regex
+            # Finally, get house names or numbers using regex. If this fails just set
+            # the house number or name field to address line 1.
             for address in addresses:
                 if address.thoroughfare_or_desc.lower() not in address.line_1.lower():
                     address.house_num_or_name = address.line_1
@@ -481,7 +543,8 @@ class Scraper:
             with self._db_lock:
                 session.commit()
 
-    def get_all_thoroughfares(self):
+    def cleanup_all_addresses(self):
+        """Attempt to cleanup all addresses in each postcode"""
         try:
             with Session(self.engine) as session:
                 distinct_postcodes = session.query(db_repr.OnsPostcode).join(db_repr.SimpleAddress).group_by(db_repr.SimpleAddress.postcode).all()
@@ -493,7 +556,7 @@ class Scraper:
             )
 
             for postcode in distinct_postcodes:
-                self.process_thoroughfares_for_postcode(postcode)
+                self.cleanup_addresses_for_postcode(postcode)
                 process.update(1)
         except Exception:
             with Session(self.engine) as session:
@@ -506,5 +569,5 @@ if __name__ == "__main__":
     config.init_loggers()
     config.parse_config()
 
-    x = Scraper()
-    x.get_all_thoroughfares()
+    x = AddrFetcher()
+    x.cleanup_all_addresses()
