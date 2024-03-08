@@ -112,15 +112,15 @@ class ConstituencyInfoOutputter:
 
     def make_csv_streets_in_constituency(
         self,
-        constituency_name: Optional[str] = None,
-        constituency_id: Optional[str] = None,
+        name: Optional[str] = None,
+        id: Optional[str] = None,
     ):
         """Make CSV of all streets in a given constituency"""
-        assert constituency_id is not None or constituency_name is not None
+        assert id is not None or name is not None
         with Session(self.engine) as session:
-            if constituency_name is None:
-                constituency_name = self.constituency_parser.get_constituency(
-                    constituency_id
+            if name is None:
+                name = self.constituency_parser.get_constituency(
+                    id
                 ).name
 
             base_query = (
@@ -131,13 +131,13 @@ class ConstituencyInfoOutputter:
                 .where(db_repr.SimpleAddress.thoroughfare_or_desc != "")
             )
 
-            if constituency_id is not None:
+            if id is not None:
                 mid_query = base_query.filter(
-                    db_repr.OnsConstituency.oid == constituency_id
+                    db_repr.OnsConstituency.oid == id
                 )
             else:
                 mid_query = base_query.filter(
-                    db_repr.OnsConstituency.name == constituency_name
+                    db_repr.OnsConstituency.name == name
                 )
 
             final_query = mid_query.distinct(
@@ -147,23 +147,23 @@ class ConstituencyInfoOutputter:
             df = pd.read_sql(final_query.selectable, self.engine)
             if len(df.index) == 0:
                 self.logger.debug(
-                    f"Found no addresses for constituency {constituency_name}"
+                    f"Found no addresses for constituency {name}"
                 )
             else:
-                dir = self.get_specific_constituency_folder(constituency_name)
-                df.to_csv(str(dir / f"{constituency_name} Street Names.csv"))
+                dir = self.get_specific_constituency_folder(name)
+                df.to_csv(str(dir / f"{name} Street Names.csv"))
 
     def make_csv_addresses_in_constituency(
         self,
-        constituency_name: Optional[str] = None,
-        constituency_id: Optional[str] = None,
+        name: Optional[str] = None,
+        id: Optional[str] = None,
     ):
         """Make CSV of all addresses in a given constituency"""
-        assert constituency_id is not None or constituency_name is not None
+        assert id is not None or name is not None
         with Session(self.engine) as session:
-            if constituency_name is None:
-                constituency_name = self.constituency_parser.get_constituency(
-                    constituency_id
+            if name is None:
+                name = self.constituency_parser.get_constituency(
+                    id
                 ).name
 
             base_query = (
@@ -174,23 +174,23 @@ class ConstituencyInfoOutputter:
                 .where(db_repr.SimpleAddress.thoroughfare_or_desc != "")
             )
 
-            if constituency_id is not None:
+            if id is not None:
                 final_query = base_query.filter(
-                    db_repr.OnsConstituency.oid == constituency_id
+                    db_repr.OnsConstituency.oid == id
                 )
             else:
                 final_query = base_query.filter(
-                    db_repr.OnsConstituency.name == constituency_name
+                    db_repr.OnsConstituency.name == name
                 )
 
             df = pd.read_sql(final_query.selectable, self.engine)
             if len(df.index) == 0:
                 self.logger.debug(
-                    f"Found no addresses for constituency {constituency_name}"
+                    f"Found no addresses for constituency {name}"
                 )
             else:
-                dir = self.get_specific_constituency_folder(constituency_name)
-                df.to_csv(str(dir / f"{constituency_name} Addresses.csv"))
+                dir = self.get_specific_constituency_folder(name)
+                df.to_csv(str(dir / f"{name} Addresses.csv"))
 
     def make_csvs_for_all_constituencies(self):
         """
@@ -205,7 +205,7 @@ class ConstituencyInfoOutputter:
 
             def make_csvs_for_constituency(constituency_id: str) -> bool:
                 self.make_csv_streets_in_constituency(id=constituency_id)
-                self.make_csv_addresses_in_constituency(constituency_id=constituency_id)
+                self.make_csv_addresses_in_constituency(id=constituency_id)
 
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=multiprocessing.cpu_count()
@@ -229,29 +229,55 @@ class ConstituencyInfoOutputter:
                 search_term, constituency_names, n=5, cutoff=0.3
             )
 
-    def percent_fetched_for_constituency(self, constituency_name: str):
+    def percent_fetched_for_constituency(self, name: str):
         """
         Prints the percentage of postcode areas that address data
         has been fetched for in a given constituency
         """
         with Session(self.engine) as session:
-            num_postcodes_in_constituency = (
+            num_postcodes_in_area = (
                 session.query(db_repr.OnsPostcode)
                 .join(db_repr.OnsConstituency)
-                .where(db_repr.OnsConstituency.name == constituency_name)
+                .where(db_repr.OnsConstituency.name == name)
                 .count()
             )
             num_postcodes_fetched = (
                 session.query(db_repr.PostcodeFetched)
                 .join(db_repr.OnsConstituency)
-                .where(db_repr.OnsConstituency.name == constituency_name)
+                .where(db_repr.OnsConstituency.name == name)
                 .count()
             )
-            percent = (num_postcodes_fetched / num_postcodes_in_constituency) * 100
+            percent = (num_postcodes_fetched / num_postcodes_in_area) * 100
 
-            print_str = f"In {constituency_name}, {num_postcodes_in_constituency=}, {num_postcodes_fetched=}, {percent=}"
+            print_str = f"In {name}, {num_postcodes_in_area=}, {num_postcodes_fetched=}, {percent=}"
             self.logger.info(
-                f"In {constituency_name}, {num_postcodes_in_constituency=}, {num_postcodes_fetched=}, {percent=}"
+                f"In {name}, {num_postcodes_in_area=}, {num_postcodes_fetched=}, {percent=}"
+            )
+            print(print_str)
+
+    def percent_fetched_for_local_authority(self, name: str):
+        """
+        Prints the percentage of postcode areas that address data
+        has been fetched for in a given local authority
+        """
+        with Session(self.engine) as session:
+            num_postcodes_in_area = (
+                session.query(db_repr.OnsPostcode)
+                .join(db_repr.OnsLocalAuthorityDistrict)
+                .where(db_repr.OnsLocalAuthorityDistrict.name == name)
+                .count()
+            )
+            num_postcodes_fetched = (
+                session.query(db_repr.PostcodeFetched)
+                .join(db_repr.OnsLocalAuthorityDistrict)
+                .where(db_repr.OnsLocalAuthorityDistrict.name == name)
+                .count()
+            )
+            percent = (num_postcodes_fetched / num_postcodes_in_area) * 100
+
+            print_str = f"In {name}, {num_postcodes_in_area=}, {num_postcodes_fetched=}, {percent=}"
+            self.logger.info(
+                f"In {name}, {num_postcodes_in_area=}, {num_postcodes_fetched=}, {percent=}"
             )
             print(print_str)
 
@@ -585,8 +611,15 @@ def output_csvs():
         help="Do a cleanup of all stored addresses",
     )
     parser.add_argument(
+        "-s",
+        "--output_csvs",
+        action="store_true",
+        help="Output csvs",
+    )
+    parser.add_argument(
         "-d",
         "--debug_get_address",
+        action="store_true",
         help="Return usage limits for address.io",
     )
 
@@ -610,21 +643,30 @@ def output_csvs():
                 )
             )
             return
+        
+        if args.cleanup_addresses:
+            comb.street_fetcher.cleanup_all_addresses()
+            return
 
         if args.addressio_limits:
             print(comb.street_fetcher.num_req_manger.get_limits())
             return
 
         if args.num_scraped:
-            comb.percent_fetched_for_constituency(data_opts.constituency)
+            if args.constituency:
+                for constituency in data_opts.constituencies:
+                    comb.percent_fetched_for_constituency(data_opts.constituencies)
+            else:
+                for local_authority in data_opts.local_authorities:
+                    comb.percent_fetched_for_local_authority(data_opts.constituencies)
             return
 
         if args.fetch:
             if args.constituency:
-                comb.fetch_addresses_in_constituencies([data_opts.constituency])
+                comb.fetch_addresses_in_constituencies(data_opts.constituencies)
             elif args.local_authority:
                 comb.fetch_addresses_in_local_authorities(
-                    str(data_opts.local_authorities).split(",")
+                    data_opts.local_authorities
                 )
             return
 
@@ -632,20 +674,28 @@ def output_csvs():
             comb.process_csvs()
             return
 
-        if data_opts.constituency:
-            comb.make_csv_streets_in_constituency(name=data_opts.constituency)
-            comb.make_csv_addresses_in_constituency(
-                constituency_name=data_opts.constituency
-            )
+        if args.output_csvs:
+            if args.constituency:
+                for constituency in data_opts.constituencies:
+                    comb.make_csv_streets_in_constituency(name=constituency)
+                    comb.make_csv_addresses_in_constituency(
+                        name=constituency
+                    )
+            elif args.local_authority:
+                for local_authority in data_opts.local_authorities:
+                    comb.make_csv_streets_in_local_authority(name=local_authority)
+                    comb.make_csv_addresses_in_local_authority(
+                        name=local_authority
+                    )
             return
 
         if args.postcodes_by_age:
             if args.constituency:
                 comb.make_csv_postcodes_ranked_by_age_in_constituencies(
-                    str(data_opts.constituency).split(",")
+                    str(data_opts.constituencies).split(",")
                 )
             elif args.local_authority:
                 comb.make_csv_postcodes_ranked_by_age_in_local_authorities(
-                    str(data_opts.local_authorities).split(",")
+                    data_opts.local_authorities
                 )
             return

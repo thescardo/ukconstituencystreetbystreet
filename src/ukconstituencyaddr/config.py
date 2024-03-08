@@ -36,7 +36,7 @@ def init_loggers():
 class DataOptsConfig:
     """Data manipulation configuration"""
 
-    constituency: str
+    constituencies: List[str]
     local_authorities: List[str]
 
 
@@ -120,7 +120,7 @@ def parse_config():
             "get_address_io_admin_key": "",
         }
 
-        config_parser["DATA_OPTS"] = {"constituency": "", "local_authorities": ""}
+        config_parser["DATA_OPTS"] = {"constituencies": "", "local_authorities": ""}
 
         with open(CONFIG_FILE, "w") as configfile:
             config_parser.write(configfile)
@@ -171,7 +171,7 @@ def parse_config():
             get_address_io_admin_key=scraping_conf["get_address_io_admin_key"],
         ),
         data_opts=DataOptsConfig(
-            constituency=data_opts["constituency"],
-            local_authorities=data_opts["local_authorities"],
+            constituencies=str(data_opts["constituencies"]).split(','),
+            local_authorities=str(data_opts["local_authorities"]).split(','),
         ),
     )
