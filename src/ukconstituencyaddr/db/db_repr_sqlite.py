@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol
 
-from sqlalchemy import Engine, ForeignKey, Integer, String, create_engine
+from sqlalchemy import Engine, Float, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -12,6 +12,7 @@ from sqlalchemy.orm import (
     mapped_column,
     relationship,
 )
+from sqlalchemy.ext.declarative import declarative_base
 
 from ukconstituencyaddr.config import MAIN_STORAGE_FOLDER
 
@@ -83,10 +84,15 @@ class CsvFilesModified(Base):
         )
 
 
+class OnsConstituencyColumnsNames(enum.StrEnum):
+    OID = "oid"
+    NAME = "name"
+
+
 class OnsConstituency(Base):
     __tablename__ = "ons_constituency"
 
-    id: Mapped[str] = mapped_column(String(9), primary_key=True)
+    oid: Mapped[str] = mapped_column(primary_key=True)
     name: Mapped[str]
 
     postcodes: Mapped[List["OnsPostcode"]] = relationship(
@@ -94,7 +100,89 @@ class OnsConstituency(Base):
     )
 
     def __repr__(self) -> str:
-        return self._repr(id=self.id, name=self.name)
+        return self._repr(oid=self.oid, name=self.name)
+
+
+class OnsLocalAuthorityColumnsNames(enum.StrEnum):
+    OID = "oid"
+    NAME = "name"
+    WARD_NAME = "ward_name"
+
+
+class OnsLocalAuthorityDistrict(Base):
+    __tablename__ = "ons_local_auth_district"
+
+    oid: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    ward_name: Mapped[str]
+
+    postcodes: Mapped[List["OnsPostcode"]] = relationship(
+        back_populates="local_authority", lazy="select"
+    )
+
+    def __repr__(self) -> str:
+        return self._repr(
+            oid=self.oid,
+            name=self.name,
+            ward_name=self.ward_name,
+        )
+
+
+class OnsMsoaColumnsNames(enum.StrEnum):
+    OID = "oid"
+    NAME = "name"
+
+
+class OnsMsoa(Base):
+    __tablename__ = "ons_msoa"
+
+    oid: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str]
+
+    postcodes: Mapped[List["OnsPostcode"]] = relationship(
+        back_populates="msoa", lazy="select"
+    )
+
+    def __repr__(self) -> str:
+        return self._repr(
+            oid=self.oid,
+            name=self.name,
+        )
+
+
+class CensusAgeByMsoaColumnsNames(enum.StrEnum):
+    MSOA_ID = "msoa_id"
+    AGE_RANGE = "age_range"
+    OBSERVED_COUNT = "observed_count"
+    PERCENT_OF_MSOA = "percent_of_msoa"
+
+
+class CensusAgeRange(enum.StrEnum):
+    R_0_15 = "0-15"
+    R_16_35 = "16-35"
+    R_36_100 = "36-100+"
+
+
+class CensusAgeByMsoa(Base):
+    __tablename__ = "census_age_by_msoa"
+
+    msoa_id: Mapped[str] = mapped_column(
+        ForeignKey("ons_msoa.oid"),
+        primary_key=True,
+    )
+    age_range: Mapped[int] = mapped_column(primary_key=True)
+    observed_count: Mapped[int]
+    percent_of_msoa: Mapped[float]
+
+    msoa: Mapped["OnsMsoa"] = relationship()
+
+    def __repr__(self) -> str:
+        return self._repr(
+            id=self.msoa_id,
+            name=self.age_range,
+            observed_count=self.observed_count,
+            percent_of_msoa=self.percent_of_msoa,
+        )
 
 
 class OnsPostcodeColumnNames(enum.StrEnum):
@@ -104,33 +192,33 @@ class OnsPostcodeColumnNames(enum.StrEnum):
     REGION_ID = "region_id"
     CONSTITUENCY_ID = "constituency_id"
     ELECTORAL_WARD_ID = "electoral_ward_id"
+    LOCAL_AUTHORITY_DISTRICT_ID = "local_authority_district_id"
+    MSOA_ID = "msoa_id"
 
 
 class OnsPostcode(Base):
     __tablename__ = "ons_postcode"
 
-    postcode: Mapped[str] = mapped_column(
-        String(7), primary_key=True, name=OnsPostcodeColumnNames.POSTCODE
+    postcode: Mapped[str] = mapped_column(primary_key=True)
+    postcode_district: Mapped[str] = mapped_column(index=True)
+    country_id: Mapped[Optional[str]]
+    region_id: Mapped[Optional[str]]
+    constituency_id: Mapped[str] = mapped_column(ForeignKey("ons_constituency.oid"))
+    electoral_ward_id: Mapped[str]
+    local_authority_district_id: Mapped[str] = mapped_column(
+        ForeignKey("ons_local_auth_district.oid"),
     )
-    postcode_district: Mapped[str] = mapped_column(
-        String(4), index=True, name=OnsPostcodeColumnNames.POSTCODE_DISTRICT
-    )
-    country_id: Mapped[Optional[str]] = mapped_column(
-        String(9), name=OnsPostcodeColumnNames.COUNTRY_ID
-    )
-    region_id: Mapped[Optional[str]] = mapped_column(
-        String(9), name=OnsPostcodeColumnNames.REGION_ID
-    )
-    constituency_id: Mapped[str] = mapped_column(
-        ForeignKey("ons_constituency.id"), name=OnsPostcodeColumnNames.CONSTITUENCY_ID
-    )
-    electoral_ward_id: Mapped[str] = mapped_column(
-        String(9), name=OnsPostcodeColumnNames.ELECTORAL_WARD_ID
-    )
+    msoa_id: Mapped[str] = mapped_column(ForeignKey("ons_msoa.oid"))
 
     constituency: Mapped["OnsConstituency"] = relationship(
         back_populates="postcodes", lazy="select"
     )
+
+    local_authority: Mapped["OnsLocalAuthorityDistrict"] = relationship(
+        back_populates="postcodes", lazy="select"
+    )
+
+    msoa: Mapped["OnsMsoa"] = relationship(back_populates="postcodes", lazy="select")
 
     addresses: Mapped[List["SimpleAddress"]] = relationship(
         back_populates="ons_postcode", lazy="select"
@@ -161,19 +249,13 @@ class OsOpennameRoadColumnNames(enum.StrEnum):
 class OsOpennameRoad(Base):
     __tablename__ = "os_openname_road"
 
-    os_id: Mapped[str] = mapped_column(
-        String, primary_key=True, name=OsOpennameRoadColumnNames.OS_ID
-    )
-    name: Mapped[str] = mapped_column(String, name=OsOpennameRoadColumnNames.NAME)
-    local_type: Mapped[str] = mapped_column(
-        String, name=OsOpennameRoadColumnNames.LOCAL_TYPE
-    )
+    os_id: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    local_type: Mapped[str]
     postcode_district: Mapped[str] = mapped_column(
-        ForeignKey("ons_postcode.postcode_district"), name=OsOpennameRoadColumnNames.POSTCODE_DISTRICT
+        ForeignKey("ons_postcode.postcode_district"),
     )
-    populated_place: Mapped[Optional[str]] = mapped_column(
-        String, name=OsOpennameRoadColumnNames.POPULATED_PLACE
-    )
+    populated_place: Mapped[Optional[str]]
 
     ons_postcodes: Mapped[List[OnsPostcode]] = relationship(
         back_populates="roads", lazy="select"
@@ -207,30 +289,18 @@ class SimpleAddressColumnNames(enum.StrEnum):
 class SimpleAddress(Base):
     __tablename__ = "simple_addresses"
 
-    get_address_io_id: Mapped[str] = mapped_column(
-        String, name=SimpleAddressColumnNames.GET_ADDRESS_IO_ID, primary_key=True
-    )
-    house_num_or_name: Mapped[Optional[str]] = mapped_column(
-        String, name=SimpleAddressColumnNames.HOUSE_NUM_OR_NAME
-    )
-    line_1: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_1)
-    line_2: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_2)
-    line_3: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_3)
-    line_4: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.LINE_4)
-    thoroughfare_or_desc: Mapped[str] = mapped_column(
-        String, name=SimpleAddressColumnNames.THOROUGHFARE_OR_DESC
-    )
-    town_or_city: Mapped[str] = mapped_column(
-        String, name=SimpleAddressColumnNames.TOWN_OR_CITY
-    )
-    locality: Mapped[str] = mapped_column(
-        String, name=SimpleAddressColumnNames.LOCALITY
-    )
-    county: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.COUNTY)
-    country: Mapped[str] = mapped_column(String, name=SimpleAddressColumnNames.COUNTRY)
-    postcode = mapped_column(
-        ForeignKey("ons_postcode.postcode"), name=SimpleAddressColumnNames.POSTCODE
-    )
+    get_address_io_id: Mapped[str] = mapped_column(primary_key=True)
+    house_num_or_name: Mapped[Optional[str]]
+    line_1: Mapped[Optional[str]]
+    line_2: Mapped[Optional[str]]
+    line_3: Mapped[Optional[str]]
+    line_4: Mapped[Optional[str]]
+    thoroughfare_or_desc: Mapped[Optional[str]]
+    town_or_city: Mapped[Optional[str]]
+    locality: Mapped[Optional[str]]
+    county: Mapped[Optional[str]]
+    country: Mapped[Optional[str]]
+    postcode = mapped_column(ForeignKey("ons_postcode.postcode"))
 
     ons_postcode: Mapped[OnsPostcode] = relationship(
         back_populates="addresses", lazy="select"
@@ -238,7 +308,7 @@ class SimpleAddress(Base):
 
     def __repr__(self) -> str:
         return self._repr(
-            id=self.id,
+            oid=self.get_address_io_id,
             postcode=self.postcode,
             line_1=self.line_1,
             line_2=self.line_2,
@@ -265,12 +335,9 @@ class PostcodeFetched(Base):
     postcode = mapped_column(
         ForeignKey("ons_postcode.postcode"),
         primary_key=True,
-        name=PostcodeFetchedNames.POSTCODE,
     )
-    constituency_id: Mapped[str] = mapped_column(
-        ForeignKey("ons_constituency.id"), name=PostcodeFetchedNames.CONSTITUENCY_ID
-    )
-    was_fetched = mapped_column(String, name=PostcodeFetchedNames.WAS_FETCHED)
+    constituency_id: Mapped[str] = mapped_column(ForeignKey("ons_constituency.oid"))
+    was_fetched: Mapped[bool] = mapped_column()
 
     def __repr__(self) -> str:
         return self._repr(

@@ -58,6 +58,8 @@ tqdm==4.66.1
     # via ukconstuencystreetcheck (pyproject.toml)
 types-requests==2.31.0.2
     # via ukconstuencystreetcheck (pyproject.toml)
+types-tqdm==4.66.0.20240106
+    # via ukconstuencystreetcheck (pyproject.toml)
 types-urllib3==1.26.25.14
     # via types-requests
 typing-extensions==4.7.1
@@ -68,3 +70,5 @@ tzdata==2023.3
     # via pandas
 urllib3==2.0.4
     # via requests
+uvloop==0.19.0
+    # via ukconstuencystreetcheck (pyproject.toml)

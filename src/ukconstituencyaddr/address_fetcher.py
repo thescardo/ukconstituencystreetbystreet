@@ -3,7 +3,9 @@ Tools to import use ONS data to get addresses in a postcode that match up to a g
 
 Uses the getaddress.io API.
 
-The Royal Mail and OS map databases also match up with the data specified above, but because of private investors the actual address data to match up with the postcodes is not free despite being mostly created by a (at the time) public entity. See https://en.wikipedia.org/wiki/Postcode_Address_File
+The Royal Mail and OS map databases also match up with the data specified above, but because of private
+investors the actual address data to match up with the postcodes is not free despite being mostly created
+by a (at the time) public entity. See https://en.wikipedia.org/wiki/Postcode_Address_File
 """
 
 import argparse
@@ -35,20 +37,16 @@ from ukconstituencyaddr import config
 HOUSE_NUMBER_PATTERN = re.compile(
     r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-/]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
 )
-LTD_PO_BOX_PATTERN = re.compile(
-    r'.*(ltd|po box|plc).*', re.IGNORECASE
-)
+LTD_PO_BOX_PATTERN = re.compile(r".*(ltd|po box|plc).*", re.IGNORECASE)
 
-PO_BOX_PATTERN = re.compile(
-    r'.*(po box).*', re.IGNORECASE
-)
+PO_BOX_PATTERN = re.compile(r".*(po box).*", re.IGNORECASE)
 
 PARTIAL_LOOKUP_MAX_NUM_ADDRESSES = 20
 
 MAX_FULL_ADDRESS_LOOKUPS_PER_DAY = 5000
 
 TEMPLATE = (
-    "{line_1}|{line_2}|{line_3}|{line_4}|{town_or_city}|{locality}|{county}|{country}"
+    r"{line_1}|{line_2}|{line_3}|{line_4}|{town_or_city}|{locality}|{county}|{country}"
 )
 
 GET_ADDRESS_IO_SUGGESTIONS_KEY = "suggestions"
@@ -112,18 +110,18 @@ def get_address_resp_for_postcode(
 
     api_key = config.config.scraping.get_address_io_api_key
 
-    url = f"https://api.getAddress.io/autocomplete/{postcode}?api-key={api_key}"
-    headers = {"content-type": "application/json"}
-
+    base_url = f"https://api.getAddress.io/autocomplete/{postcode}?api-key={api_key}"
     # Only do the full lookup when requested
     if full_lookup:
-        params = ALL_RESULTS
+        url = f"{base_url}&all=true&template={TEMPLATE}"
     else:
-        params = FIRST_20_ADDR_LOOKUP_DATA_FIELD
+        url = f"{base_url}&all=false&top={PARTIAL_LOOKUP_MAX_NUM_ADDRESSES}&template={TEMPLATE}"
 
-    current = 10
+    headers = {"content-type": "application/json"}
+
+    current: float = 10
     while True:
-        response = session.get(url=url, headers=headers, params=params)
+        response = session.get(url=url, headers=headers)
 
         match response.status_code:
             case 200:
@@ -139,6 +137,7 @@ def get_address_resp_for_postcode(
 @dataclass
 class UsageCounts:
     """Store how much of the daily/monthly limits of getaddress.io we've used"""
+
     UsageToday: int
     DailyLimit: int
     MonthlyBuffer: int
@@ -152,7 +151,7 @@ def get_limit_for_day(session: Optional[requests.Session] = None) -> UsageCounts
 
     DEFAULT_USAGE = UsageCounts(0, 5000, 500, 0)
 
-    api_key = config.config.scraping.get_address_io_api_key.strip()
+    api_key = config.config.scraping.get_address_io_admin_key.strip()
     if len(api_key) == 0:
         # Just assume values
         return DEFAULT_USAGE
@@ -192,6 +191,7 @@ def acquire_lock_timeout(lock: threading.Lock, timeout: float):
 
 class NumAddressReqManager:
     """Manages the usage limits for getaddress.io"""
+
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self._lock = threading.Lock()
@@ -201,6 +201,9 @@ class NumAddressReqManager:
 
         self._usages: UsageCounts = get_limit_for_day()
         self.logger.info(f"Usages limits are: {self._usages}")
+
+    def get_limits(self) -> UsageCounts:
+        return get_limit_for_day()
 
     def request_and_decrement(self) -> bool:
         with acquire_lock_timeout(self._lock, timeout=5) as locked:
@@ -235,7 +238,7 @@ class AddrFetcher:
         self._db_lock = threading.Lock()
 
         self.max_simultaneous_loops = 20
-        self.use_full_lookups = True
+        self.use_full_lookups = config.config.scraping.allow_getting_full_address
 
         self._dict_lock = threading.Lock()
         self.streets_per_postcode_district: Dict[str, Set[str]] = defaultdict(set)
@@ -354,24 +357,26 @@ class AddrFetcher:
                 db_sess.commit()
                 return True, True
 
-    def fetch_for_constituency(self, constituency_name: str):
+    def fetch_for_local_authority(self, name: str):
         """
-        Fetch all addresses for the given consistency by downloading
+        Fetch all addresses for the given local authority by downloading
         all addresses in a given postcode that are in the given constituency
         """
         with Session(self.engine) as session:
             results = (
                 session.query(db_repr.OnsPostcode)
-                .join(db_repr.OnsConstituency)
-                .where(db_repr.OnsConstituency.name == constituency_name)
+                .join(db_repr.OnsLocalAuthorityDistrict)
+                .where(db_repr.OnsLocalAuthorityDistrict.name == name)
                 .all()
             )
             if len(results) == 0:
-                raise ReferenceError("Need to have parsed ONS files to scrape data")
+                raise ReferenceError(
+                    f"Need to have parsed ONS files to scrape data for {name}"
+                )
 
             process = tqdm.tqdm(
                 total=len(results),
-                desc=f"Fetching addresses for postcodes in {constituency_name}",
+                desc=f"Fetching addresses for postcodes in {name}",
             )
 
             # Use a threadpool so that we can see the progress in the terminal
@@ -388,15 +393,65 @@ class AddrFetcher:
                 for _ in concurrent.futures.as_completed(get_fut):
                     process.update(1)
 
-    def fetch(self, constituencies_to_scrape: List[str]):
+    def fetch_for_constituency(self, name: str):
+        """
+        Fetch all addresses for the given consistency by downloading
+        all addresses in a given postcode that are in the given constituency
+        """
+        with Session(self.engine) as session:
+            results = (
+                session.query(db_repr.OnsPostcode)
+                .join(db_repr.OnsConstituency)
+                .where(db_repr.OnsConstituency.name == name)
+                .all()
+            )
+            if len(results) == 0:
+                raise ReferenceError("Need to have parsed ONS files to scrape data")
+
+            process = tqdm.tqdm(
+                total=len(results),
+                desc=f"Fetching addresses for postcodes in {name}",
+            )
+
+            # Use a threadpool so that we can see the progress in the terminal
+            # by using tqdm in the main thread
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                # Start the load operations and mark each future with its URL
+                get_fut = [
+                    executor.submit(
+                        self.get_addresses_for_postcode, ons_postcode=postcode
+                    )
+                    for postcode in results
+                ]
+
+                for _ in concurrent.futures.as_completed(get_fut):
+                    process.update(1)
+
+    def fetch_constituencies(self, to_scrape: List[str]):
         """Fetch all addresses for each consituency specified"""
-        self.logger.info(f"Scraping addresses for {constituencies_to_scrape}")
+        self.logger.info(f"Scraping addresses for {to_scrape}")
 
         with Session(self.engine) as session:
             start_num_addresses = session.query(db_repr.SimpleAddress).count()
 
-        for constituency_name in constituencies_to_scrape:
+        for constituency_name in to_scrape:
             self.fetch_for_constituency(constituency_name)
+
+        with Session(self.engine) as session:
+            end_num_addresses = session.query(db_repr.SimpleAddress).count()
+
+        new_addresses = end_num_addresses - start_num_addresses
+        self.logger.info(f"Scraped {new_addresses} new addresses")
+
+    def fetch_local_authorities(self, to_scrape: List[str]):
+        """Fetch all addresses for each local authority specified"""
+        self.logger.info(f"Scraping addresses for {to_scrape}")
+
+        with Session(self.engine) as session:
+            start_num_addresses = session.query(db_repr.SimpleAddress).count()
+
+        for constituency_name in to_scrape:
+            self.fetch_for_local_authority(constituency_name)
 
         with Session(self.engine) as session:
             end_num_addresses = session.query(db_repr.SimpleAddress).count()
@@ -424,14 +479,28 @@ class AddrFetcher:
             # is done lazily so that we only fetch roads in a given postcode when we
             # need them.
             with self._dict_lock:
-                if ons_postcode.postcode_district not in self.streets_per_postcode_district:
-                    os_roads = session.query(db_repr.OsOpennameRoad).where(db_repr.OsOpennameRoad.postcode_district == ons_postcode.postcode_district).all()
+                if (
+                    ons_postcode.postcode_district
+                    not in self.streets_per_postcode_district
+                ):
+                    os_roads = (
+                        session.query(db_repr.OsOpennameRoad)
+                        .where(
+                            db_repr.OsOpennameRoad.postcode_district
+                            == ons_postcode.postcode_district
+                        )
+                        .all()
+                    )
 
-                    roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
+                    roads = self.streets_per_postcode_district[
+                        ons_postcode.postcode_district
+                    ]
                     for os_road in os_roads:
                         roads.add(os_road.name)
                 else:
-                    roads = self.streets_per_postcode_district[ons_postcode.postcode_district]
+                    roads = self.streets_per_postcode_district[
+                        ons_postcode.postcode_district
+                    ]
 
             not_found_1st: Deque[db_repr.SimpleAddress] = deque()
             road_names_found: Set[str] = set()
@@ -444,7 +513,12 @@ class AddrFetcher:
 
                 found_thoroughfare = False
 
-                for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                for each_line in [
+                    address.line_1,
+                    address.line_2,
+                    address.line_3,
+                    address.line_4,
+                ]:
                     # First remove PO boxes, completely useless to us.
                     po_box_match = re.match(PO_BOX_PATTERN, each_line)
                     if po_box_match is not None:
@@ -456,7 +530,7 @@ class AddrFetcher:
                     close_matches = difflib.get_close_matches(
                         each_line, roads, cutoff=0.9
                     )
-                    
+
                     if len(close_matches) != 0:
                         match = close_matches[0]
                         address.thoroughfare_or_desc = match
@@ -471,7 +545,12 @@ class AddrFetcher:
             # Second pass if any road names were found for this postcode
             for address in not_found_1st:
                 found_thoroughfare = False
-                for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                for each_line in [
+                    address.line_1,
+                    address.line_2,
+                    address.line_3,
+                    address.line_4,
+                ]:
                     for road_name in road_names_found:
                         road_name_l = road_name.lower()
 
@@ -491,7 +570,12 @@ class AddrFetcher:
             # Third pass using slow regex
             for address in not_found_2nd:
                 found_thoroughfare = False
-                for each_line in [address.line_1, address.line_2, address.line_3, address.line_4]:
+                for each_line in [
+                    address.line_1,
+                    address.line_2,
+                    address.line_3,
+                    address.line_4,
+                ]:
                     house_match = re.match(HOUSE_NUMBER_PATTERN, each_line)
 
                     if house_match is not None:
@@ -512,7 +596,7 @@ class AddrFetcher:
             # line number that isn't empty as the thoroughfare
             for address in not_found_3rd:
                 lines = [address.line_4, address.line_3, address.line_2, address.line_1]
-                
+
                 for line in lines:
                     if len(line) > 0:
                         match = re.match(LTD_PO_BOX_PATTERN, line)
@@ -547,9 +631,16 @@ class AddrFetcher:
         """Attempt to cleanup all addresses in each postcode"""
         try:
             with Session(self.engine) as session:
-                distinct_postcodes = session.query(db_repr.OnsPostcode).join(db_repr.SimpleAddress).group_by(db_repr.SimpleAddress.postcode).all()
+                distinct_postcodes = (
+                    session.query(db_repr.OnsPostcode)
+                    .join(db_repr.SimpleAddress)
+                    .group_by(db_repr.SimpleAddress.postcode)
+                    .all()
+                )
 
-            self.logger.info(f"Found {len(distinct_postcodes)} distinct postcodes in addresses table")
+            self.logger.info(
+                f"Found {len(distinct_postcodes)} distinct postcodes in addresses table"
+            )
             process = tqdm.tqdm(
                 total=len(distinct_postcodes),
                 desc="Getting thoroughfares for all postcodes",
@@ -560,8 +651,8 @@ class AddrFetcher:
                 process.update(1)
         except Exception:
             with Session(self.engine) as session:
-                update(db_repr.SimpleAddress).values(house_num_or_name='')
-                update(db_repr.SimpleAddress).values(thoroughfare_or_desc='')
+                update(db_repr.SimpleAddress).values(house_num_or_name="")
+                update(db_repr.SimpleAddress).values(thoroughfare_or_desc="")
                 session.commit()
 
 

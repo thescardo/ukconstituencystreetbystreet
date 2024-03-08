@@ -20,6 +20,7 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 class OsOpennamesFields(enum.StrEnum):
     """Enum to match fields to headers in the CSV"""
+
     ID = "ID"
     NAMES_URI = "NAMES_URI"
     NAME1 = "NAME1"
@@ -119,13 +120,14 @@ class OsOpenNamesCsvsParser:
                 inplace=True,
             )
 
-            rows = rows[rows[db_repr.OsOpennameRoadColumnNames.LOCAL_TYPE].str.contains('Road')]
+            rows = rows[
+                rows[db_repr.OsOpennameRoadColumnNames.LOCAL_TYPE].str.contains("Road")
+            ]
             rows.to_sql(
                 db_repr.OsOpennameRoad.__tablename__,
                 self.engine,
                 if_exists="append",
                 index=False,
-                index_label=db_repr.OsOpennameRoadColumnNames.OS_ID,
                 chunksize=100000,
             )
 

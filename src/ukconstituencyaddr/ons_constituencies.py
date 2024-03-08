@@ -25,6 +25,7 @@ class ConstituencyField(enum.IntEnum):
 
 class ConstituencyCsvParser:
     """Parses the ONS constituency CSV and writes it to the database"""
+
     def __init__(self) -> None:
         self.csv = config.config.input.ons_constituencies_csv
         if not self.csv.exists():
@@ -42,9 +43,7 @@ class ConstituencyCsvParser:
 
     def process_csv(self):
         """Reads the CSV into the database"""
-        modified = cacher.DbCacheInst.check_and_set_file_modified(
-            self.csv_name, self.csv
-        )
+        modified = cacher.DbCacheInst.check_file_modified(self.csv_name, self.csv)
         if not modified:
             self.logger.info("Already parsed CSV file and placed into db")
             return
@@ -57,15 +56,22 @@ class ConstituencyCsvParser:
             usecols=[0, 1],
         )
 
-        rows.rename(columns={"PCON22CD": "id", "PCON22NM": "name"}, inplace=True)
+        rows.rename(
+            columns={
+                rows.columns[0]: db_repr.OnsConstituencyColumnsNames.OID,
+                rows.columns[1]: db_repr.OnsConstituencyColumnsNames.NAME,
+            },
+            inplace=True,
+        )
         rows.to_sql(
             db_repr.OnsConstituency.__tablename__,
             self.engine,
             if_exists="append",
             index=False,
-            index_label="id",
             chunksize=100000,
         )
+
+        cacher.DbCacheInst.set_file_modified(self.csv_name, self.csv)
 
         self.logger.info(
             f"Finished parsing ONS constituencies file, wrote {len(rows.index)} items"

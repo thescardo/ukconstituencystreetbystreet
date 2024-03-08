@@ -19,6 +19,7 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 
 class OnsPostcodeField(enum.StrEnum):
     """Enum to match fields to headers in the CSV"""
+
     POSTCODE = "pcd"
     POSTCODE_2 = "pcd2"
     POSTCODE_VAR = "pcds"
@@ -84,9 +85,7 @@ class PostcodeCsvParser:
 
     def process_csv(self):
         """Reads the CSV into the database"""
-        modified = cacher.DbCacheInst.check_and_set_file_modified(
-            self.csv_name, self.csv
-        )
+        modified = cacher.DbCacheInst.check_file_modified(self.csv_name, self.csv)
         if not modified:
             self.logger.info("Already parsed CSV file and placed into db")
             return
@@ -118,6 +117,8 @@ class PostcodeCsvParser:
                 OnsPostcodeField.REGION,
                 OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY,
                 OnsPostcodeField.ELECTORAL_WARD,
+                OnsPostcodeField.LOCAL_AUTHORITY_DISTRICT,
+                OnsPostcodeField.ML_SUPER_OUTPUT_AREA_CENSUS_21,
             ],
         )
 
@@ -128,19 +129,26 @@ class PostcodeCsvParser:
                 OnsPostcodeField.REGION: db_repr.OnsPostcodeColumnNames.REGION_ID,
                 OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY: db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID,  # noqa: E501
                 OnsPostcodeField.ELECTORAL_WARD: db_repr.OnsPostcodeColumnNames.ELECTORAL_WARD_ID,
+                OnsPostcodeField.LOCAL_AUTHORITY_DISTRICT: db_repr.OnsPostcodeColumnNames.LOCAL_AUTHORITY_DISTRICT_ID,
+                OnsPostcodeField.ML_SUPER_OUTPUT_AREA_CENSUS_21: db_repr.OnsPostcodeColumnNames.MSOA_ID,
             },
             inplace=True,
         )
-        rows.dropna(subset=[db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID], inplace=True)
-        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1)
+        rows.dropna(
+            subset=[db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID], inplace=True
+        )
+        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(
+            lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1
+        )
         rows.to_sql(
             db_repr.OnsPostcode.__tablename__,
             self.engine,
-            if_exists="append",
             index=False,
-            index_label=db_repr.OnsPostcodeColumnNames.POSTCODE,
+            if_exists="append",
             chunksize=100000,
         )
+
+        cacher.DbCacheInst.set_file_modified(self.csv_name, self.csv)
 
         self.logger.info(
             f"Finished parsing ONS postcodes file, wrote {len(rows.index)} items"
@@ -148,13 +156,14 @@ class PostcodeCsvParser:
 
     def add_postcode_district_to_add(self):
         rows = pd.read_sql_table(db_repr.OnsPostcode.__tablename__, self.engine)
-        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1)
+        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(
+            lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1
+        )
         rows.to_sql(
             db_repr.OnsPostcode.__tablename__,
             self.engine,
             if_exists="append",
             index=False,
-            index_label=db_repr.OnsPostcodeColumnNames.POSTCODE,
             chunksize=100000,
         )
 
@@ -164,6 +173,7 @@ class PostcodeCsvParser:
             session.query(db_repr.OnsPostcode).delete()
             session.commit()
             cacher.DbCacheInst.clear_file_modified(self.csv_name)
+
 
 if __name__ == "__main__":
     config.init_loggers()
