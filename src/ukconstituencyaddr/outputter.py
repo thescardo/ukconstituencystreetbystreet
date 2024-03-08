@@ -269,6 +269,7 @@ class ConstituencyInfoOutputter:
             )
             num_postcodes_fetched = (
                 session.query(db_repr.PostcodeFetched)
+                .join(db_repr.OnsPostcode)
                 .join(db_repr.OnsLocalAuthorityDistrict)
                 .where(db_repr.OnsLocalAuthorityDistrict.name == name)
                 .count()
@@ -655,10 +656,10 @@ def output_csvs():
         if args.num_scraped:
             if args.constituency:
                 for constituency in data_opts.constituencies:
-                    comb.percent_fetched_for_constituency(data_opts.constituencies)
+                    comb.percent_fetched_for_constituency(constituency)
             else:
                 for local_authority in data_opts.local_authorities:
-                    comb.percent_fetched_for_local_authority(data_opts.constituencies)
+                    comb.percent_fetched_for_local_authority(local_authority)
             return
 
         if args.fetch:
