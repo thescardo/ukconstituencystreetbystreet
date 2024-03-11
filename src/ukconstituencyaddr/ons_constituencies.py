@@ -27,7 +27,7 @@ class ConstituencyCsvParser:
     """Parses the ONS constituency CSV and writes it to the database"""
 
     def __init__(self) -> None:
-        self.csv = config.config.input.ons_constituencies_csv
+        self.csv = config.conf.input.ons_constituencies_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 

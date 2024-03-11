@@ -10,17 +10,18 @@ by a (at the time) public entity. See https://en.wikipedia.org/wiki/Postcode_Add
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 from collections import defaultdict, deque
 from dataclasses import dataclass
 import multiprocessing
+import random
 import re
 import threading
 import time
 from typing import Deque, Dict, List, Optional, Set, Tuple
 import logging
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 import tqdm
 from urllib3.util.retry import Retry
 import concurrent.futures
@@ -108,7 +109,7 @@ def get_address_resp_for_postcode(
     if session is None:
         session = get_retry_session()
 
-    api_key = config.config.scraping.get_address_io_api_key
+    api_key = config.conf.scraping.get_address_io_api_key
 
     base_url = f"https://api.getAddress.io/autocomplete/{postcode}?api-key={api_key}"
     # Only do the full lookup when requested
@@ -151,7 +152,7 @@ def get_limit_for_day(session: Optional[requests.Session] = None) -> UsageCounts
 
     DEFAULT_USAGE = UsageCounts(0, 5000, 500, 0)
 
-    api_key = config.config.scraping.get_address_io_admin_key.strip()
+    api_key = config.conf.scraping.get_address_io_admin_key.strip()
     if len(api_key) == 0:
         # Just assume values
         return DEFAULT_USAGE
@@ -238,10 +239,147 @@ class AddrFetcher:
         self._db_lock = threading.Lock()
 
         self.max_simultaneous_loops = 20
-        self.use_full_lookups = config.config.scraping.allow_getting_full_address
+        self.use_full_lookups = config.conf.scraping.allow_getting_full_address
 
         self._dict_lock = threading.Lock()
         self.streets_per_postcode_district: Dict[str, Set[str]] = defaultdict(set)
+
+        # Counts number of API requests this minute
+        self._api_counter_lock = threading.Lock()
+        self._api_use_last_db_read: Optional[datetime] = None
+        self._db_count_last_5_mins: int = 0
+        self._api_counter_current_time: Optional[datetime] = None
+        self._api_use_counter_this_min: int = 0
+
+    def _get_floored_minute_now(self) -> datetime:
+        """
+        Returns the current time floored to the minute
+        (e.g. 19:56:01.123456 becomes 19:56:00.000000)
+        """
+        return datetime.now(timezone.utc).replace(second=0, microsecond=0)
+
+    def _get_api_req_count_last_5_minutes(self) -> int:
+        """Gets number of API requests made in the last 5 minutes"""
+        with Session(self.engine) as db_sess:
+            with self._api_counter_lock:
+                # Only get time after getting lock
+                utc_now = self._get_floored_minute_now()
+                self.logger.debug(f"{utc_now=}, {self._api_use_last_db_read=}, {self._db_count_last_5_mins=}, {self._api_use_counter_this_min}")
+
+                # If we have't read from the DB this minute, read the current count now
+                if self._api_use_last_db_read != utc_now:
+                    num_requests_last_5_minutes = (
+                        db_sess.query(func.sum(db_repr.ApiUseLog.num_requests))
+                        .where(db_repr.ApiUseLog.minute >= (utc_now - timedelta(minutes=5)))
+                        .scalar()
+                    )
+
+                    # May not have any rows in the last 5 minutes
+                    if num_requests_last_5_minutes is None:
+                        self._db_count_last_5_mins = 0
+                    else:
+                        self._db_count_last_5_mins = num_requests_last_5_minutes
+
+                # Return current db count + not written to db since we're still in the same minute
+                return self._db_count_last_5_mins + self._api_use_counter_this_min
+
+    def _can_req_based_on_api_count(self) -> bool:
+        """
+        Returns whether we can make an API request based off whats
+        in the database + counted in RAM.
+        
+        If the api use count is exceeded, write the current count
+        in RAM to the database and return False.
+        """
+        api_use_in_the_last_5_mins = self._get_api_req_count_last_5_minutes()
+        max_requests_with_headroom = config.conf.scraping.max_requests_per_5_mins - 50
+        self.logger.debug(
+            f"{api_use_in_the_last_5_mins=}, {max_requests_with_headroom=}"
+        )
+        if (
+            api_use_in_the_last_5_mins
+            >= max_requests_with_headroom
+        ):
+            # Update the counter in the database since we've run out of requests
+            self._update_api_counter_in_db()
+            return False
+        else:
+            return True
+
+    def _update_api_counter_in_db(self) -> None:
+        """Updates api use counter in the database with current counter and resets the counter"""
+        if self._api_counter_current_time is None:
+            return
+
+        with self._db_lock:
+            utc_now = self._get_floored_minute_now()
+            with Session(self.engine) as db_sess:
+                latest = (
+                    db_sess.query(db_repr.ApiUseLog)
+                    .order_by(db_repr.ApiUseLog.minute.desc())
+                    .first()
+                )
+
+                # If an entry already exists then add counter
+                if latest is not None and utc_now == latest.minute:
+                    latest.num_requests += self._api_use_counter_this_min
+                else:
+                    db_sess.add(
+                        db_repr.ApiUseLog(
+                            minute=self._api_counter_current_time,
+                            num_requests=self._api_use_counter_this_min,
+                        )
+                    )
+
+                db_sess.commit()
+
+                # Reset counter for this minute
+                self._api_use_counter_this_min = 0
+                self._api_counter_current_time = None
+
+    def _add_api_req_count_this_minute(self) -> None:
+        """
+        Increment local counter for num of API requests, writing the number
+        of requests to the database if we go over the minute.
+        """
+        with self._api_counter_lock:
+            # Only get time after getting lock
+            utc_now = self._get_floored_minute_now()
+
+            if self._api_counter_current_time != utc_now and self._api_counter_current_time is not None:
+                self._update_api_counter_in_db()
+            elif self._api_counter_current_time is None:
+                self._api_counter_current_time = utc_now
+
+            self._api_use_counter_this_min += 1
+
+    def _get_address_resp_for_postcode_wrapper(self, *args, **kwargs):
+        """Wraps get_address_resp_for_postcode by counting API use"""
+        # Last case counter in case we wait more than 5 minutes
+        counter = 5
+        req_count_low_enough = False
+        while counter > 0:
+            if self._can_req_based_on_api_count():
+                self.logger.debug("Not exceeded API limit, making request")
+                req_count_low_enough = True
+                break
+            else:
+                wait_time_s = 60
+                self.logger.debug(
+                    f"Exceeding API limit, waiting {wait_time_s}s"
+                )
+                time.sleep(wait_time_s)
+                continue
+
+        if not req_count_low_enough:
+            utc_now = self._get_floored_minute_now()
+            raise RuntimeError(
+                f"{utc_now=} Waited 5 minutes but API request "
+                "count never went down! Programming error!"
+            )
+
+        self._add_api_req_count_this_minute()
+        return get_address_resp_for_postcode(*args, **kwargs)
 
     def get_addresses_for_postcode(
         self,
@@ -267,7 +405,7 @@ class AddrFetcher:
             return 200, True
         self.logger.info(f"Fetching addresses for {postcode=}")
 
-        resp, parsed = get_address_resp_for_postcode(
+        resp, parsed = self._get_address_resp_for_postcode_wrapper(
             postcode=postcode, full_lookup=False, session=http_sess
         )
 
@@ -299,7 +437,7 @@ class AddrFetcher:
 
             if self.num_req_manger.request_and_decrement():
                 self.logger.debug(f"Need to get all addresses for {postcode=}")
-                resp, parsed = get_address_resp_for_postcode(
+                resp, parsed = self._get_address_resp_for_postcode_wrapper(
                     postcode=postcode, full_lookup=True, session=http_sess
                 )
 
@@ -379,19 +517,9 @@ class AddrFetcher:
                 desc=f"Fetching addresses for postcodes in {name}",
             )
 
-            # Use a threadpool so that we can see the progress in the terminal
-            # by using tqdm in the main thread
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                # Start the load operations and mark each future with its URL
-                get_fut = [
-                    executor.submit(
-                        self.get_addresses_for_postcode, ons_postcode=postcode
-                    )
-                    for postcode in results
-                ]
-
-                for _ in concurrent.futures.as_completed(get_fut):
-                    process.update(1)
+            for postcode in results:
+                self.get_addresses_for_postcode(postcode)
+                process.update(1)
 
     def fetch_for_constituency(self, name: str):
         """
@@ -413,19 +541,9 @@ class AddrFetcher:
                 desc=f"Fetching addresses for postcodes in {name}",
             )
 
-            # Use a threadpool so that we can see the progress in the terminal
-            # by using tqdm in the main thread
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                # Start the load operations and mark each future with its URL
-                get_fut = [
-                    executor.submit(
-                        self.get_addresses_for_postcode, ons_postcode=postcode
-                    )
-                    for postcode in results
-                ]
-
-                for _ in concurrent.futures.as_completed(get_fut):
-                    process.update(1)
+            for postcode in results:
+                self.get_addresses_for_postcode(postcode)
+                process.update(1)
 
     def fetch_constituencies(self, to_scrape: List[str]):
         """Fetch all addresses for each consituency specified"""

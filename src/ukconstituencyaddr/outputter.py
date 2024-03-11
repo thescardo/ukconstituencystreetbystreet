@@ -19,6 +19,7 @@ from ukconstituencyaddr import (
     ons_postcodes,
     os_opennames,
     ons_msoa,
+    ons_oa,
     ons_local_authority_district,
 )
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
@@ -34,14 +35,15 @@ class ConstituencyInfoOutputter:
         self.local_authority_parser = (
             ons_local_authority_district.LocalAuthorityCsvParser()
         )
+        self.oa_parser = ons_oa.OnsOaCsvParser()
         self.msoa_parser = ons_msoa.OnsMsoaCsvParser()
-        self.census_age_by_msoa_parser = ons_msoa.CensusAgeByMsoaCsvParser()
+        self.census_age_by_oa_parser = ons_oa.CensusAgeByOaCsvParser()
 
         self.street_fetcher = address_fetcher.AddrFetcher()
 
-        self.output_folder = config.config.output.output_folder
+        self.output_folder = config.conf.output.output_folder
         self.output_folder.mkdir(parents=True, exist_ok=True)
-        self.use_subfolders = config.config.output.use_subfolders
+        self.use_subfolders = config.conf.output.use_subfolders
 
         self.engine = db_repr.get_engine()
 
@@ -89,8 +91,9 @@ class ConstituencyInfoOutputter:
             self.postcode_parser,
             self.osopennames_parser,
             self.local_authority_parser,
+            self.oa_parser,
             self.msoa_parser,
-            self.census_age_by_msoa_parser,
+            self.census_age_by_oa_parser,
         ]
         process = tqdm.tqdm(total=len(parsers), desc="Importing CSVs to local database")
         for x in parsers:
@@ -119,9 +122,7 @@ class ConstituencyInfoOutputter:
         assert id is not None or name is not None
         with Session(self.engine) as session:
             if name is None:
-                name = self.constituency_parser.get_constituency(
-                    id
-                ).name
+                name = self.constituency_parser.get_constituency(id).name
 
             base_query = (
                 session.query(db_repr.SimpleAddress)
@@ -132,13 +133,9 @@ class ConstituencyInfoOutputter:
             )
 
             if id is not None:
-                mid_query = base_query.filter(
-                    db_repr.OnsConstituency.oid == id
-                )
+                mid_query = base_query.filter(db_repr.OnsConstituency.oid == id)
             else:
-                mid_query = base_query.filter(
-                    db_repr.OnsConstituency.name == name
-                )
+                mid_query = base_query.filter(db_repr.OnsConstituency.name == name)
 
             final_query = mid_query.distinct(
                 db_repr.SimpleAddress.thoroughfare_or_desc
@@ -146,9 +143,7 @@ class ConstituencyInfoOutputter:
 
             df = pd.read_sql(final_query.selectable, self.engine)
             if len(df.index) == 0:
-                self.logger.debug(
-                    f"Found no addresses for constituency {name}"
-                )
+                self.logger.debug(f"Found no addresses for constituency {name}")
             else:
                 dir = self.get_specific_constituency_folder(name)
                 df.to_csv(str(dir / f"{name} Street Names.csv"))
@@ -162,9 +157,7 @@ class ConstituencyInfoOutputter:
         assert id is not None or name is not None
         with Session(self.engine) as session:
             if name is None:
-                name = self.constituency_parser.get_constituency(
-                    id
-                ).name
+                name = self.constituency_parser.get_constituency(id).name
 
             base_query = (
                 session.query(db_repr.SimpleAddress)
@@ -175,19 +168,13 @@ class ConstituencyInfoOutputter:
             )
 
             if id is not None:
-                final_query = base_query.filter(
-                    db_repr.OnsConstituency.oid == id
-                )
+                final_query = base_query.filter(db_repr.OnsConstituency.oid == id)
             else:
-                final_query = base_query.filter(
-                    db_repr.OnsConstituency.name == name
-                )
+                final_query = base_query.filter(db_repr.OnsConstituency.name == name)
 
             df = pd.read_sql(final_query.selectable, self.engine)
             if len(df.index) == 0:
-                self.logger.debug(
-                    f"Found no addresses for constituency {name}"
-                )
+                self.logger.debug(f"Found no addresses for constituency {name}")
             else:
                 dir = self.get_specific_constituency_folder(name)
                 df.to_csv(str(dir / f"{name} Addresses.csv"))
@@ -632,7 +619,7 @@ def output_csvs():
 
         comb = ConstituencyInfoOutputter()
 
-        data_opts = config.config.data_opts
+        data_opts = config.conf.data_opts
 
         if args.debug_get_address:
             print(
@@ -644,7 +631,7 @@ def output_csvs():
                 )
             )
             return
-        
+
         if args.cleanup_addresses:
             comb.street_fetcher.cleanup_all_addresses()
             return
@@ -666,9 +653,7 @@ def output_csvs():
             if args.constituency:
                 comb.fetch_addresses_in_constituencies(data_opts.constituencies)
             elif args.local_authority:
-                comb.fetch_addresses_in_local_authorities(
-                    data_opts.local_authorities
-                )
+                comb.fetch_addresses_in_local_authorities(data_opts.local_authorities)
             return
 
         if args.build_cache:
@@ -679,15 +664,11 @@ def output_csvs():
             if args.constituency:
                 for constituency in data_opts.constituencies:
                     comb.make_csv_streets_in_constituency(name=constituency)
-                    comb.make_csv_addresses_in_constituency(
-                        name=constituency
-                    )
+                    comb.make_csv_addresses_in_constituency(name=constituency)
             elif args.local_authority:
                 for local_authority in data_opts.local_authorities:
                     comb.make_csv_streets_in_local_authority(name=local_authority)
-                    comb.make_csv_addresses_in_local_authority(
-                        name=local_authority
-                    )
+                    comb.make_csv_addresses_in_local_authority(name=local_authority)
             return
 
         if args.postcodes_by_age:

@@ -21,7 +21,9 @@ class CsvName(enum.StrEnum):
     OsOpennamesRoad = "os_opennames_roads"
     OnsLocalAuthorityDistrict = "ons_local_auth_csv"
     OnsMsoa = "ons_msoa_csv"
+    OnsOa = "ons_oa_csv"
     CensusAgeByMsoa = "census_age_by_msoa_csv"
+    CensusAgeByOa = "census_age_by_oa_csv"
 
 
 class DbCache:

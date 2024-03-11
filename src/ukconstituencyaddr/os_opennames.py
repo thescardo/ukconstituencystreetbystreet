@@ -63,7 +63,7 @@ class OsOpenNamesCsvsParser:
     def __init__(
         self,
     ) -> None:
-        self.csv_folder = config.config.input.os_openname_csv_folder
+        self.csv_folder = config.conf.input.os_openname_csv_folder
         if not self.csv_folder.exists() or not self.csv_folder.is_dir():
             raise Exception(f"CSV file not at {self.csv_folder}")
 

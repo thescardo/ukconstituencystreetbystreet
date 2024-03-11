@@ -20,6 +20,8 @@ greenlet==2.0.2
     # via sqlalchemy
 idna==3.4
     # via requests
+iniconfig==2.0.0
+    # via pytest
 isort==5.12.0
     # via ukconstuencystreetcheck (pyproject.toml)
 lxml==4.9.3
@@ -33,13 +35,19 @@ mypy-extensions==1.0.0
 numpy==1.25.2
     # via pandas
 packaging==23.1
-    # via black
+    # via
+    #   black
+    #   pytest
 pandas==2.0.3
     # via ukconstuencystreetcheck (pyproject.toml)
 pathspec==0.11.2
     # via black
 platformdirs==3.10.0
     # via black
+pluggy==1.4.0
+    # via pytest
+pytest==8.1.1
+    # via ukconstuencystreetcheck (pyproject.toml)
 python-dateutil==2.8.2
     # via pandas
 pytz==2023.3

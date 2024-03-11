@@ -47,7 +47,7 @@ class LocalAuthorityCsvParser:
     def __init__(
         self,
     ) -> None:
-        self.csv = config.config.input.ons_local_auth_csv
+        self.csv = config.conf.input.ons_local_auth_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 

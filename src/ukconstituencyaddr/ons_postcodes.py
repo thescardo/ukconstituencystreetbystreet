@@ -6,6 +6,10 @@ See https://geoportal.statistics.gov.uk/. This module parses National Statistics
 
 import enum
 import logging
+import multiprocessing
+import re
+from typing import Tuple
+import numpy as np
 
 import pandas as pd
 from sqlalchemy import select
@@ -15,6 +19,74 @@ from ukconstituencyaddr import ons_constituencies
 from ukconstituencyaddr import config
 from ukconstituencyaddr.db import cacher
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+
+
+OUTCODE_REGEX = r"(?P<sub_district>(?P<district_1>(?P<area_1>[A-Z]{1,2})[0-9]{1})[A-Z]{1})|(?P<district_2>(?P<area_2>[A-Z]{1,2})[0-9]{1,2})|(?P<district_3>[A-Z]{3,4})"
+
+
+def strip_spaces(x: str):
+    return x.replace(" ", "")
+
+
+def split_postcode(outcode: str) -> Tuple[str, str, str]:
+    """
+    Splits an outcode (for example, from AA9A 9AA, AA9A would be the outcode)
+    into area, district and subdistrict
+    """
+    match = re.search(OUTCODE_REGEX, outcode)
+    if match is None:
+        raise ValueError(f"Couldn't find match in '{outcode}'!")
+
+    sub_district = match.group("sub_district")
+    district = match.group("district_1")
+    if district is None or len(district) == 0:
+        district = match.group("district_2")
+    if district is None or len(district) == 0:
+        district = match.group("district_3")
+    area = match.group("area_1")
+    if area is None or len(area) == 0:
+        area = match.group("area_2")
+
+    if sub_district is None:
+        sub_district = ""
+    if area is None:
+        area = ""
+    return area, district, sub_district
+
+
+def breakdown_postcode(rows: pd.DataFrame) -> pd.DataFrame:
+    # Break down postcodes into components
+
+    # OUTCODE is the first 2-4 characters. Since the outcode is always 3 characters
+    # long we can just remove the last 3 characters and get it
+    rows[db_repr.OnsPostcodeColumnNames.POSTCODE_OUTCODE] = rows.apply(
+        lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1
+    )
+
+    # INCODE is always the last 3 characters
+    rows[db_repr.OnsPostcodeColumnNames.POSTCODE_INCODE] = rows.apply(
+        lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][-3:], axis=1
+    )
+
+    # SECTOR is the OUTCODE plus the first character of the INCODE, so just remove the last
+    # two characters
+    rows[db_repr.OnsPostcodeColumnNames.POSTCODE_SECTOR] = rows.apply(
+        lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-2], axis=1
+    )
+
+    rows[
+        [
+            db_repr.OnsPostcodeColumnNames.POSTCODE_AREA,
+            db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT,
+            db_repr.OnsPostcodeColumnNames.POSTCODE_SUBDISTRICT,
+        ]
+    ] = rows.apply(
+        lambda x: split_postcode(x[db_repr.OnsPostcodeColumnNames.POSTCODE_OUTCODE]),
+        axis="columns",
+        result_type="expand",
+    )
+
+    return rows
 
 
 class OnsPostcodeField(enum.StrEnum):
@@ -71,7 +143,7 @@ class PostcodeCsvParser:
     def __init__(
         self,
     ) -> None:
-        self.csv = config.config.input.ons_postcodes_csv
+        self.csv = config.conf.input.ons_postcodes_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
@@ -91,9 +163,6 @@ class PostcodeCsvParser:
             return
 
         self.logger.info("Parsing ONS postcodes file")
-
-        def strip_spaces(x: str):
-            return x.replace(" ", "")
 
         rows = pd.read_csv(
             self.csv,
@@ -118,6 +187,7 @@ class PostcodeCsvParser:
                 OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY,
                 OnsPostcodeField.ELECTORAL_WARD,
                 OnsPostcodeField.LOCAL_AUTHORITY_DISTRICT,
+                OnsPostcodeField.OUTPUT_AREA_CENSUS_21,
                 OnsPostcodeField.ML_SUPER_OUTPUT_AREA_CENSUS_21,
             ],
         )
@@ -130,6 +200,7 @@ class PostcodeCsvParser:
                 OnsPostcodeField.WESTMINISTER_PARLIAMENTRY_CONSTITUENCY: db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID,  # noqa: E501
                 OnsPostcodeField.ELECTORAL_WARD: db_repr.OnsPostcodeColumnNames.ELECTORAL_WARD_ID,
                 OnsPostcodeField.LOCAL_AUTHORITY_DISTRICT: db_repr.OnsPostcodeColumnNames.LOCAL_AUTHORITY_DISTRICT_ID,
+                OnsPostcodeField.OUTPUT_AREA_CENSUS_21: db_repr.OnsPostcodeColumnNames.OA_ID,
                 OnsPostcodeField.ML_SUPER_OUTPUT_AREA_CENSUS_21: db_repr.OnsPostcodeColumnNames.MSOA_ID,
             },
             inplace=True,
@@ -137,10 +208,13 @@ class PostcodeCsvParser:
         rows.dropna(
             subset=[db_repr.OnsPostcodeColumnNames.CONSTITUENCY_ID], inplace=True
         )
-        rows[db_repr.OnsPostcodeColumnNames.POSTCODE_DISTRICT] = rows.apply(
-            lambda x: x[db_repr.OnsPostcodeColumnNames.POSTCODE][:-3], axis=1
-        )
-        rows.to_sql(
+
+        list_df = np.array_split(rows, multiprocessing.cpu_count())
+        with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+            data = pool.map(breakdown_postcode, list_df)
+        final_rows = pd.concat(data)
+
+        final_rows.to_sql(
             db_repr.OnsPostcode.__tablename__,
             self.engine,
             index=False,

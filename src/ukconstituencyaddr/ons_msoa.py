@@ -1,5 +1,5 @@
 """
-Middle Layers Super Output Areas - small areas 'comprising between 2,000 and 6,000 households and have a usually resident population between 5,000 and 15,000 persons', see https://www.ons.gov.uk/methodology/geography/ukgeographies/statisticalgeographies.
+Middle Layers Super Output Areas - small areas 'comprising between 2,000 and 6,000 households and have a usually resident population between 5,000 and 15,000 persons', see https://www.ons.gov.uk/methodology/geography/ukgeographies/censusgeographies/census2021geographies.
 
 Uses data from 2021
 
@@ -48,7 +48,7 @@ class OnsMsoaCsvParser:
     def __init__(
         self,
     ) -> None:
-        self.csv = config.config.input.ons_msoa_csv
+        self.csv = config.conf.input.ons_msoa_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
@@ -126,7 +126,7 @@ class CensusAgeByMsoaCsvParser:
     def __init__(
         self,
     ) -> None:
-        self.csv = config.config.input.census_age_by_msoa_csv
+        self.csv = config.conf.input.census_age_by_msoa_csv
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
@@ -184,6 +184,8 @@ class CensusAgeByMsoaCsvParser:
             * rows["observed_count"]
             / rows.groupby("msoa_id")["observed_count"].transform("sum")
         )
+
+        print(rows)
 
         # Assign a category using bins to each row, e.g. 16 will go in the 15-35 bin
         rows["age_range"] = pd.cut(
