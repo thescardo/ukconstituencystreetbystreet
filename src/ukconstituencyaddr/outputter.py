@@ -400,25 +400,24 @@ class ConstituencyInfoOutputter:
                         db_repr.OnsPostcode.postcode,
                         db_repr.OnsConstituency.name,
                         db_repr.OnsLocalAuthorityDistrict.name,
-                        db_repr.CensusAgeByMsoa.observed_count,
-                        db_repr.CensusAgeByMsoa.percent_of_msoa,
+                        db_repr.CensusAgeByOa.total_15_to_34,
+                        db_repr.CensusAgeByOa.percentage_15_to_34,
                     )
                     .filter(
                         db_repr.OnsPostcode.local_authority_district_id
                         == db_repr.OnsLocalAuthorityDistrict.oid
                     )
                     .filter(
-                        db_repr.OnsPostcode.msoa_id == db_repr.CensusAgeByMsoa.msoa_id
+                        db_repr.OnsPostcode.oa_id == db_repr.CensusAgeByOa.oa_id
                     )
                     .filter(
-                        db_repr.CensusAgeByMsoa.age_range
-                        == db_repr.CensusAgeRange.R_16_35
+                        db_repr.OnsConstituency.oid
+                        == db_repr.OnsPostcode.constituency_id
                     )
-                    .filter(db_repr.OnsConstituency.oid == constituency.oid)
-                    .filter(
-                        db_repr.OnsLocalAuthorityDistrict.oid
-                        == db_repr.OnsPostcode.local_authority_district_id
-                    )
+                    .filter(db_repr.OnsLocalAuthorityDistrict.oid == constituency.oid)
+                    .filter(db_repr.CensusAgeByOa.oa_id == db_repr.OnsPostcode.oa_id)
+                    .join(db_repr.SimpleAddress)
+                    .distinct(db_repr.OnsPostcode.postcode)
                 )
 
                 df = pd.read_sql(query.selectable, self.engine)
@@ -427,27 +426,27 @@ class ConstituencyInfoOutputter:
             combined_df = pd.concat(postcode_dfs, ignore_index=True, sort=False)
             combined_df = combined_df.sort_values(
                 [
-                    "census_age_by_msoa_percent_of_msoa",
-                    "census_age_by_msoa_observed_count",
+                    "census_age_by_oa_percentage_15_to_34",
+                    "census_age_by_oa_total_15_to_34",
                     "ons_postcode_postcode",
                 ],
                 ascending=[False, False, True],
             )
-            combined_df = combined_df.round({"census_age_by_msoa_percent_of_msoa": 2})
+            combined_df = combined_df.round({"census_age_by_oa_percentage_15_to_34": 2})
             combined_df = combined_df.rename(
                 columns={
                     "ons_postcode_postcode": "Postcode",
                     "ons_constituency_name": "Constituency Name",
                     "ons_local_auth_district_name": "Local Authority Name",
-                    "census_age_by_msoa_observed_count": "Count of People",
-                    "census_age_by_msoa_percent_of_msoa": "Percent of People",
+                    "census_age_by_oa_total_15_to_34": "Count of People",
+                    "census_age_by_oa_percentage_15_to_34": "Percent of People",
                 }
             )
 
             if len(combined_df.index) == 0:
-                self.logger.debug(f"Found no postcodes for local authorities {names}")
+                self.logger.debug(f"Found no postcodes for constituencies {names}")
             else:
-                dir = self.get_local_authority_folder()
+                dir = self.get_constituency_folder()
                 combined_df.to_csv(
                     str(
                         dir
@@ -477,25 +476,24 @@ class ConstituencyInfoOutputter:
                         db_repr.OnsPostcode.postcode,
                         db_repr.OnsConstituency.name,
                         db_repr.OnsLocalAuthorityDistrict.name,
-                        db_repr.CensusAgeByMsoa.observed_count,
-                        db_repr.CensusAgeByMsoa.percent_of_msoa,
+                        db_repr.CensusAgeByOa.total_15_to_34,
+                        db_repr.CensusAgeByOa.percentage_15_to_34,
                     )
                     .filter(
                         db_repr.OnsPostcode.local_authority_district_id
                         == db_repr.OnsLocalAuthorityDistrict.oid
                     )
                     .filter(
-                        db_repr.OnsPostcode.msoa_id == db_repr.CensusAgeByMsoa.msoa_id
-                    )
-                    .filter(
-                        db_repr.CensusAgeByMsoa.age_range
-                        == db_repr.CensusAgeRange.R_16_35
+                        db_repr.OnsPostcode.oa_id == db_repr.CensusAgeByOa.oa_id
                     )
                     .filter(
                         db_repr.OnsConstituency.oid
                         == db_repr.OnsPostcode.constituency_id
                     )
                     .filter(db_repr.OnsLocalAuthorityDistrict.oid == authority.oid)
+                    .filter(db_repr.CensusAgeByOa.oa_id == db_repr.OnsPostcode.oa_id)
+                    .join(db_repr.SimpleAddress)
+                    .distinct(db_repr.OnsPostcode.postcode)
                 )
 
                 df = pd.read_sql(query.selectable, self.engine)
@@ -504,20 +502,20 @@ class ConstituencyInfoOutputter:
             combined_df = pd.concat(postcode_dfs, ignore_index=True, sort=False)
             combined_df = combined_df.sort_values(
                 [
-                    "census_age_by_msoa_percent_of_msoa",
-                    "census_age_by_msoa_observed_count",
+                    "census_age_by_oa_percentage_15_to_34",
+                    "census_age_by_oa_total_15_to_34",
                     "ons_postcode_postcode",
                 ],
                 ascending=[False, False, True],
             )
-            combined_df = combined_df.round({"census_age_by_msoa_percent_of_msoa": 2})
+            combined_df = combined_df.round({"census_age_by_oa_percentage_15_to_34": 2})
             combined_df = combined_df.rename(
                 columns={
                     "ons_postcode_postcode": "Postcode",
                     "ons_constituency_name": "Constituency Name",
                     "ons_local_auth_district_name": "Local Authority Name",
-                    "census_age_by_msoa_observed_count": "Count of People",
-                    "census_age_by_msoa_percent_of_msoa": "Percent of People",
+                    "census_age_by_oa_total_15_to_34": "Count of People",
+                    "census_age_by_oa_percentage_15_to_34": "Percent of People",
                 }
             )
 

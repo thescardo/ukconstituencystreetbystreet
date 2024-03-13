@@ -34,7 +34,9 @@ def clear_api_req_table():
     ],
 )
 def test_get_api_req_count_last_5_minutes(
-    clear_api_req_table, minute_by_minute_use: Optional[List[int]], api_use_last_db_read_older: bool
+    clear_api_req_table,
+    minute_by_minute_use: Optional[List[int]],
+    api_use_last_db_read_older: bool,
 ):
     fake_datetime_now = datetime(year=2000, month=11, day=1, hour=15, minute=17)
     fake_count_this_min = 123
@@ -45,7 +47,12 @@ def test_get_api_req_count_last_5_minutes(
         with Session(db_repr.get_engine()) as db_sess:
             for x in minute_by_minute_use:
                 assert count < 0
-                db_sess.add(db_repr.ApiUseLog(minute=fake_datetime_now - timedelta(minutes=count), num_requests=x))
+                db_sess.add(
+                    db_repr.ApiUseLog(
+                        minute=fake_datetime_now - timedelta(minutes=count),
+                        num_requests=x,
+                    )
+                )
                 count -= 1
             db_sess.commit()
 

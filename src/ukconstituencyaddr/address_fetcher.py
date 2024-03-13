@@ -15,6 +15,7 @@ import json
 from collections import defaultdict, deque
 from dataclasses import dataclass
 import multiprocessing
+from multiprocessing.pool import AsyncResult
 import random
 import re
 import threading
@@ -34,13 +35,13 @@ from sqlalchemy.orm import Session
 
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 from ukconstituencyaddr import config
-
-HOUSE_NUMBER_PATTERN = re.compile(
-    r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-/]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
+from ukconstituencyaddr.multiprocess_address_cleanup import (
+    HOUSE_NUMBER_PATTERN,
+    LTD_PO_BOX_PATTERN,
+    PO_BOX_PATTERN,
+    cleanup_addresses_for_postcode_district,
+    multiprocess_init,
 )
-LTD_PO_BOX_PATTERN = re.compile(r".*(ltd|po box|plc).*", re.IGNORECASE)
-
-PO_BOX_PATTERN = re.compile(r".*(po box).*", re.IGNORECASE)
 
 PARTIAL_LOOKUP_MAX_NUM_ADDRESSES = 20
 
@@ -168,7 +169,7 @@ def get_limit_for_day(session: Optional[requests.Session] = None) -> UsageCounts
                 UsageToday=parsed["usage_today"],
                 DailyLimit=parsed["daily_limit"],
                 MonthlyBuffer=parsed["monthly_buffer"],
-                MonthlyBufferUsed=["monthly_buffer_used"],
+                MonthlyBufferUsed=parsed["monthly_buffer_used"],
             )
         case 403:
             return DEFAULT_USAGE
@@ -242,7 +243,7 @@ class AddrFetcher:
         self.use_full_lookups = config.conf.scraping.allow_getting_full_address
 
         self._dict_lock = threading.Lock()
-        self.streets_per_postcode_district: Dict[str, Set[str]] = defaultdict(set)
+        self.streets_per_postcode_outcode: Dict[str, Set[str]] = defaultdict(set)
 
         # Counts number of API requests this minute
         self._api_counter_lock = threading.Lock()
@@ -264,13 +265,17 @@ class AddrFetcher:
             with self._api_counter_lock:
                 # Only get time after getting lock
                 utc_now = self._get_floored_minute_now()
-                self.logger.debug(f"{utc_now=}, {self._api_use_last_db_read=}, {self._db_count_last_5_mins=}, {self._api_use_counter_this_min}")
+                self.logger.debug(
+                    f"{utc_now=}, {self._api_use_last_db_read=}, {self._db_count_last_5_mins=}, {self._api_use_counter_this_min}"
+                )
 
                 # If we have't read from the DB this minute, read the current count now
                 if self._api_use_last_db_read != utc_now:
                     num_requests_last_5_minutes = (
                         db_sess.query(func.sum(db_repr.ApiUseLog.num_requests))
-                        .where(db_repr.ApiUseLog.minute >= (utc_now - timedelta(minutes=5)))
+                        .where(
+                            db_repr.ApiUseLog.minute >= (utc_now - timedelta(minutes=5))
+                        )
                         .scalar()
                     )
 
@@ -287,7 +292,7 @@ class AddrFetcher:
         """
         Returns whether we can make an API request based off whats
         in the database + counted in RAM.
-        
+
         If the api use count is exceeded, write the current count
         in RAM to the database and return False.
         """
@@ -296,10 +301,7 @@ class AddrFetcher:
         self.logger.debug(
             f"{api_use_in_the_last_5_mins=}, {max_requests_with_headroom=}"
         )
-        if (
-            api_use_in_the_last_5_mins
-            >= max_requests_with_headroom
-        ):
+        if api_use_in_the_last_5_mins >= max_requests_with_headroom:
             # Update the counter in the database since we've run out of requests
             self._update_api_counter_in_db()
             return False
@@ -346,7 +348,10 @@ class AddrFetcher:
             # Only get time after getting lock
             utc_now = self._get_floored_minute_now()
 
-            if self._api_counter_current_time != utc_now and self._api_counter_current_time is not None:
+            if (
+                self._api_counter_current_time != utc_now
+                and self._api_counter_current_time is not None
+            ):
                 self._update_api_counter_in_db()
             elif self._api_counter_current_time is None:
                 self._api_counter_current_time = utc_now
@@ -364,10 +369,8 @@ class AddrFetcher:
                 req_count_low_enough = True
                 break
             else:
-                wait_time_s = 60
-                self.logger.debug(
-                    f"Exceeding API limit, waiting {wait_time_s}s"
-                )
+                wait_time_s = 61  # Wait an extra second just for rounding
+                self.logger.debug(f"Exceeding API limit, waiting {wait_time_s}s")
                 time.sleep(wait_time_s)
                 continue
 
@@ -577,7 +580,9 @@ class AddrFetcher:
         new_addresses = end_num_addresses - start_num_addresses
         self.logger.info(f"Scraped {new_addresses} new addresses")
 
-    def cleanup_addresses_for_postcode(self, ons_postcode: db_repr.OnsPostcode):
+    def cleanup_addresses_for_postcode(
+        self, ons_postcode: db_repr.OnsPostcode
+    ) -> List[db_repr.SimpleAddress]:
         """
         Performs parsing and clean up of 'thoroughfares' attribute of all addresses
         in a given postcode so that we can guess the house name or number, as well as
@@ -599,7 +604,7 @@ class AddrFetcher:
             with self._dict_lock:
                 if (
                     ons_postcode.postcode_district
-                    not in self.streets_per_postcode_district
+                    not in self.streets_per_postcode_outcode
                 ):
                     os_roads = (
                         session.query(db_repr.OsOpennameRoad)
@@ -610,13 +615,13 @@ class AddrFetcher:
                         .all()
                     )
 
-                    roads = self.streets_per_postcode_district[
+                    roads = self.streets_per_postcode_outcode[
                         ons_postcode.postcode_district
                     ]
                     for os_road in os_roads:
                         roads.add(os_road.name)
                 else:
-                    roads = self.streets_per_postcode_district[
+                    roads = self.streets_per_postcode_outcode[
                         ons_postcode.postcode_district
                     ]
 
@@ -749,24 +754,40 @@ class AddrFetcher:
         """Attempt to cleanup all addresses in each postcode"""
         try:
             with Session(self.engine) as session:
-                distinct_postcodes = (
-                    session.query(db_repr.OnsPostcode)
-                    .join(db_repr.SimpleAddress)
-                    .group_by(db_repr.SimpleAddress.postcode)
-                    .all()
-                )
+                distinct_postcode_districts = session.query(
+                    db_repr.OnsPostcode.postcode_district.distinct()
+                ).all()
 
             self.logger.info(
-                f"Found {len(distinct_postcodes)} distinct postcodes in addresses table"
-            )
-            process = tqdm.tqdm(
-                total=len(distinct_postcodes),
-                desc="Getting thoroughfares for all postcodes",
+                f"Found {len(distinct_postcode_districts)} distinct postcode districts in addresses table"
             )
 
-            for postcode in distinct_postcodes:
-                self.cleanup_addresses_for_postcode(postcode)
-                process.update(1)
+            counter = tqdm.tqdm(total=len(distinct_postcode_districts), desc="Getting thoroughfares for all addresses")
+
+            l = multiprocessing.Lock()
+            e = db_repr.get_engine()
+            self.logger.debug("created lock")
+            
+            with multiprocessing.Pool(
+                multiprocessing.cpu_count(), initializer=multiprocess_init, initargs=(l, e)
+            ) as pool:
+                self.logger.debug("Started pool")
+                results: AsyncResult = []
+                for postcode_district in distinct_postcode_districts:
+                    results.append(
+                        pool.apply_async(
+                            cleanup_addresses_for_postcode_district,
+                            args=postcode_district,
+                        )
+                    )
+
+                for x in results:
+                    self.logger.debug(f"Finished processing district {x.get()}")
+                    counter.update(1)
+
+            self.logger.debug("Finished pool")
+
+            # tqdm(, total=len(distinct_postcode_districts), desc="Getting thoroughfares for all postcodes")
         except Exception:
             with Session(self.engine) as session:
                 update(db_repr.SimpleAddress).values(house_num_or_name="")

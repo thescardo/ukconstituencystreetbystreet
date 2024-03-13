@@ -12,8 +12,12 @@ from ukconstituencyaddr.db.db_repr_sqlite import (
 )
 
 dir_path = pathlib.Path(__file__).parent
-TEST_STORAGE_FOLDER = (pathlib.Path(dir_path) / "streetcheck_test_storage").absolute().resolve()
-TEST_CSV_FOLDER = (pathlib.Path(dir_path) / "streetcheck_test_csvs").absolute().resolve()
+TEST_STORAGE_FOLDER = (
+    (pathlib.Path(dir_path) / "streetcheck_test_storage").absolute().resolve()
+)
+TEST_CSV_FOLDER = (
+    (pathlib.Path(dir_path) / "streetcheck_test_csvs").absolute().resolve()
+)
 
 TEST_STORAGE_FOLDER.mkdir(parents=True, exist_ok=True)
 TEST_CSV_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -106,12 +110,15 @@ def setup_config():
 
     config.init_loggers()
 
+
 def get_test_engine():
     return get_engine(TEST_CACHE_DB_FILE)
+
 
 @pytest.fixture(autouse=True, scope="session")
 def setup_db():
     cacher.create_all(get_test_engine())
+
 
 @pytest.fixture(autouse=True, scope="session")
 def setup_folders():

@@ -185,7 +185,7 @@ def parse_config():
             max_requests_per_5_mins=int(scraping_conf["max_requests_per_5_mins"]),
         ),
         data_opts=DataOptsConfig(
-            constituencies=str(data_opts["constituencies"]).split(","),
-            local_authorities=str(data_opts["local_authorities"]).split(","),
+            constituencies=str(data_opts["constituencies"]).split("|"),
+            local_authorities=str(data_opts["local_authorities"]).split("|"),
         ),
     )

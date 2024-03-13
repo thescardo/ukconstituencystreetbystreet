@@ -232,35 +232,6 @@ class CensusAgeByMsoa(Base):
         )
 
 
-class CensusAgeByOaColumnsNames(enum.StrEnum):
-    OA_ID = "oa_id"
-    AGE_TOTAL = "age_total"
-    TOTAL_15_TO_34 = "total_15_to_34"
-    PERCENTAGE_15_TO_34 = "percentage_15_to_34"
-
-
-class CensusAgeByOa(Base):
-    __tablename__ = "census_age_by_oa"
-
-    oa_id: Mapped[str] = mapped_column(
-        ForeignKey("ons_oa.oid"),
-        primary_key=True,
-    )
-    age_total: Mapped[int]
-    total_15_to_34: Mapped[int]
-    percentage_15_to_34: Mapped[float]
-
-    oa: Mapped["OnsOa"] = relationship()
-
-    def __repr__(self) -> str:
-        return self._repr(
-            oa_id=self.oa_id,
-            age_total=self.age_total,
-            total_15_to_34=self.total_15_to_34,
-            percentage_15_to_34=self.percentage_15_to_34,
-        )
-
-
 class OnsPostcodeColumnNames(enum.StrEnum):
     POSTCODE = "postcode"
     POSTCODE_OUTCODE = "postcode_outcode"  # 'outward code' e.g. of AA9A 9AA, 'AA9A' would be the out code
@@ -331,6 +302,35 @@ class OnsPostcode(Base):
             region_id=self.region_id,
             constituency=self.constituency,
             electoral_ward_id=self.electoral_ward_id,
+        )
+
+
+class CensusAgeByOaColumnsNames(enum.StrEnum):
+    OA_ID = "oa_id"
+    AGE_TOTAL = "age_total"
+    TOTAL_15_TO_34 = "total_15_to_34"
+    PERCENTAGE_15_TO_34 = "percentage_15_to_34"
+
+
+class CensusAgeByOa(Base):
+    __tablename__ = "census_age_by_oa"
+
+    oa_id: Mapped[str] = mapped_column(
+        ForeignKey("ons_oa.oid"),
+        primary_key=True,
+    )
+    age_total: Mapped[int]
+    total_15_to_34: Mapped[int]
+    percentage_15_to_34: Mapped[float]
+
+    oa: Mapped["OnsOa"] = relationship()
+
+    def __repr__(self) -> str:
+        return self._repr(
+            oa_id=self.oa_id,
+            age_total=self.age_total,
+            total_15_to_34=self.total_15_to_34,
+            percentage_15_to_34=self.percentage_15_to_34,
         )
 
 
@@ -436,6 +436,4 @@ class PostcodeFetched(Base):
     was_fetched: Mapped[bool] = mapped_column()
 
     def __repr__(self) -> str:
-        return self._repr(
-            id=self.id, postcode=self.postcode, was_fetched=self.was_fetched
-        )
+        return self._repr(postcode=self.postcode, was_fetched=self.was_fetched)
