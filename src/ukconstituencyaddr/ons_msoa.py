@@ -15,6 +15,7 @@ MSOA = "msoa21"
 
 import enum
 import logging
+from typing import Optional
 
 import pandas as pd
 import numpy as np
@@ -101,6 +102,18 @@ class OnsMsoaCsvParser:
         self.logger.info(
             f"Finished parsing ONS MSOA file, wrote {len(rows.index)} items"
         )
+
+    def get_msoa_by_id(self, msoa_id: str) -> Optional[db_repr.OnsMsoa]:
+        with Session(self.engine) as session:
+            if len(msoa_id) == 0:
+                raise ValueError("You must provide a string that isn't empty!")
+            else:
+                result = (
+                    session.query(db_repr.OnsMsoa)
+                    .filter(db_repr.OnsMsoa.oid == msoa_id)
+                    .one()
+                )
+                return result
 
     def clear_all(self):
         """Clears all rows from the ONS MSOA table"""

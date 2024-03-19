@@ -218,9 +218,11 @@ class NumAddressReqManager:
                 if self._usages.UsageToday < self._usages.DailyLimit:
                     self._usages.UsageToday += 1
                     return True
-                elif self._usages.MonthlyBufferUsed < self._usages.MonthlyBuffer:
-                    self._usages.MonthlyBufferUsed += 1
-                    return True
+                # Monthly buffer is broken on getaddress.io, don't ever use otherwise
+                # the account will get blocked
+                # elif self._usages.MonthlyBufferUsed < self._usages.MonthlyBuffer:
+                #     self._usages.MonthlyBufferUsed += 1
+                #     return True
                 else:
                     return False
             else:
@@ -762,14 +764,19 @@ class AddrFetcher:
                 f"Found {len(distinct_postcode_districts)} distinct postcode districts in addresses table"
             )
 
-            counter = tqdm.tqdm(total=len(distinct_postcode_districts), desc="Getting thoroughfares for all addresses")
+            counter = tqdm.tqdm(
+                total=len(distinct_postcode_districts),
+                desc="Getting thoroughfares for all addresses",
+            )
 
             l = multiprocessing.Lock()
             e = db_repr.get_engine()
             self.logger.debug("created lock")
-            
+
             with multiprocessing.Pool(
-                multiprocessing.cpu_count(), initializer=multiprocess_init, initargs=(l, e)
+                multiprocessing.cpu_count(),
+                initializer=multiprocess_init,
+                initargs=(l, e),
             ) as pool:
                 self.logger.debug("Started pool")
                 results: AsyncResult = []

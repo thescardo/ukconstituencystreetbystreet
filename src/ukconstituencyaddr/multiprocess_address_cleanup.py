@@ -204,4 +204,4 @@ def cleanup_addresses_for_postcode_district(postcode_district: str) -> str:
             return postcode_district
     except:
         print(f"Exception occured!")
-        raise  # Re-raise the exception so that the process exits 
+        raise  # Re-raise the exception so that the process exits

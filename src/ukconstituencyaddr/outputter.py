@@ -4,6 +4,7 @@ import concurrent.futures
 import json
 import logging
 import multiprocessing
+import re
 from typing import List, Optional
 import difflib
 import pathlib
@@ -78,6 +79,12 @@ class ConstituencyInfoOutputter:
     def get_local_authority_folder(self) -> pathlib.Path:
         """Returns the Path of the given local authority"""
         out = self.output_folder / "Local Authority"
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    def get_msoas_folder(self) -> pathlib.Path:
+        """Returns the Path of the given MSOA"""
+        out = self.output_folder / "MSOA"
         out.mkdir(parents=True, exist_ok=True)
         return out
 
@@ -383,7 +390,7 @@ class ConstituencyInfoOutputter:
         names: List[str],
     ):
         """Make CSV of all postcodes in a westminister constituencies with the % of young people in that postcode"""
-        assert id is not None or name is not None
+        assert len(names) > 0
         with Session(self.engine) as session:
             constituencies: List[db_repr.OnsConstituency] = []
             for name in names:
@@ -407,9 +414,7 @@ class ConstituencyInfoOutputter:
                         db_repr.OnsPostcode.local_authority_district_id
                         == db_repr.OnsLocalAuthorityDistrict.oid
                     )
-                    .filter(
-                        db_repr.OnsPostcode.oa_id == db_repr.CensusAgeByOa.oa_id
-                    )
+                    .filter(db_repr.OnsPostcode.oa_id == db_repr.CensusAgeByOa.oa_id)
                     .filter(
                         db_repr.OnsConstituency.oid
                         == db_repr.OnsPostcode.constituency_id
@@ -459,7 +464,7 @@ class ConstituencyInfoOutputter:
         names: List[str],
     ):
         """Make CSV of all postcodes in a local authority with the % of young people in that postcode"""
-        assert id is not None or name is not None
+        assert len(names) > 0
         with Session(self.engine) as session:
             authorities: List[db_repr.OnsLocalAuthorityDistrict] = []
             for name in names:
@@ -483,9 +488,7 @@ class ConstituencyInfoOutputter:
                         db_repr.OnsPostcode.local_authority_district_id
                         == db_repr.OnsLocalAuthorityDistrict.oid
                     )
-                    .filter(
-                        db_repr.OnsPostcode.oa_id == db_repr.CensusAgeByOa.oa_id
-                    )
+                    .filter(db_repr.OnsPostcode.oa_id == db_repr.CensusAgeByOa.oa_id)
                     .filter(
                         db_repr.OnsConstituency.oid
                         == db_repr.OnsPostcode.constituency_id
@@ -527,7 +530,101 @@ class ConstituencyInfoOutputter:
                     str(
                         dir
                         / f"{'_'.join(names)} Postcodes by percentage {db_repr.CensusAgeRange.R_16_35}.csv"
+                    ),
+                    index=False
+                )
+
+    def make_csv_addresses_in_msoas(
+        self,
+        msoa_ids: List[str],
+    ):
+        """Make CSV of all address and streets in a given MSOA"""
+        assert len(msoa_ids) > 0
+
+        def label_num(row):
+            nums: List[int] = []
+            for x in ["Line 4", "Line 3", "Line 2", "Line 1"]:
+                results = re.findall(r'\d+', row[x])
+                if len(results) == 0:
+                    nums.append(0)
+                else:
+                    nums.append(int(results[0]))
+
+            strs = [f"{x:10d}" for x in nums]
+
+            return ''.join(strs)
+
+
+        with Session(self.engine) as session:
+            msoas: List[db_repr.OnsMsoa] = []
+            for msoa_id in msoa_ids:
+                result = self.msoa_parser.get_msoa_by_id(msoa_id)
+                if result is None:
+                    raise Exception(f"Failed to find authority named {msoa_id}")
+                msoas.append(result)
+
+            # Query for all required authorities
+            addresses_df = []
+            for msoa in msoas:
+                query = (
+                    session.query(
+                        db_repr.SimpleAddress.house_num_or_name,
+                        db_repr.SimpleAddress.line_1,
+                        db_repr.SimpleAddress.line_2,
+                        db_repr.SimpleAddress.line_3,
+                        db_repr.SimpleAddress.line_4,
+                        db_repr.SimpleAddress.postcode,
+                        db_repr.CensusAgeByOa.percentage_15_to_34,
+                        db_repr.CensusAgeByOa.total_15_to_34
                     )
+                    .join(db_repr.OnsPostcode)
+                    .filter(db_repr.OnsPostcode.msoa_id == msoa.oid)
+                    .filter(db_repr.CensusAgeByOa.oa_id == db_repr.OnsPostcode.oa_id)
+                )
+
+                df = pd.read_sql(query.selectable, self.engine)
+                addresses_df.append(df)
+
+            combined_df = pd.concat(addresses_df, ignore_index=True, sort=False)
+            combined_df = combined_df.rename(
+                columns={
+                    "simple_addresses_house_num_or_name": "House Name or Number",
+                    "simple_addresses_line_1": "Line 1",
+                    "simple_addresses_line_2": "Line 2",
+                    "simple_addresses_line_3": "Line 3",
+                    "simple_addresses_line_4": "Line 4",
+                    "simple_addresses_postcode": "Postcode",
+                    "census_age_by_oa_percentage_15_to_34": "% of age 15-34 in Output Area",
+                    "census_age_by_oa_total_15_to_34": "Total num 15-34 in Output Area",
+                }
+            )
+            combined_df["force_num"] = combined_df.apply(label_num, axis=1)
+            combined_df = combined_df.sort_values(
+                [
+                    "Postcode",
+                    "Line 4",
+                    "Line 3",
+                    "Line 2",
+                    "force_num",
+                    "Line 1",
+                    "% of age 15-34 in Output Area",
+                    "Total num 15-34 in Output Area",
+                ],
+                ascending=[True, True, True, True, True, True, False, False],
+            )
+            combined_df = combined_df.round({"census_age_by_oa_percentage_15_to_34": 2})
+            combined_df = combined_df.drop("force_num", axis=1)
+
+            if len(combined_df.index) == 0:
+                self.logger.debug(f"Found no postcodes for MSOAs {msoa_ids}")
+            else:
+                dir = self.get_msoas_folder()
+                combined_df.to_csv(
+                    str(
+                        dir
+                        / f"MSOAs {'_'.join(msoa_ids)} Addresses {db_repr.CensusAgeRange.R_16_35}.csv"
+                    ),
+                    index=False
                 )
 
 
@@ -576,6 +673,12 @@ def output_csvs():
         "--constituency",
         action="store_true",
         help="If specified, use constituencies",
+    )
+    parser.add_argument(
+        "-m",
+        "--msoa",
+        action="store_true",
+        help="If specified, use msoa",
     )
     parser.add_argument(
         "-n",
@@ -667,6 +770,8 @@ def output_csvs():
                 for local_authority in data_opts.local_authorities:
                     comb.make_csv_streets_in_local_authority(name=local_authority)
                     comb.make_csv_addresses_in_local_authority(name=local_authority)
+            elif args.msoa:
+                comb.make_csv_addresses_in_msoas(data_opts.msoas)
             return
 
         if args.postcodes_by_age:

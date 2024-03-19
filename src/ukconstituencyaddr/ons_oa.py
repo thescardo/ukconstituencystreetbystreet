@@ -7,7 +7,8 @@ https://www.nomisweb.co.uk/sources/census_2021_bulk
 
 Filtered by oa
 
-MSOA = "msoa21"
+Output Area to Lower layer Super Output Area to Middle layer Super Output Area to Local Authority District (December 2021) Lookup in England and Wales v3
+For mappings from OA to MSOA and LSOA
 """
 
 
@@ -28,18 +29,17 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 class OnsOaField(enum.StrEnum):
     """Enum to match fields to headers in the CSV"""
 
-    ENTRY_ID = "FID"
-    ID = "OA21CD"
+    OA_ID = "OA21CD"
     LSOA_ID = "LSOA21CD"
     LSOA_NAME = "LSOA21NM"
     LSOA_WARD_NAME = "LSOA21NMW"
-    BNG_E = "BNG_E"
-    BNG_N = "BNG_N"
-    LONGITUDE = "LONG"
-    LATITUDE = "LAT"
-    SHAPE_AREA = "Shape__Area"
-    SHAPE_LENGTH = "Shape__Length"
-    GLOBAL_ID = "GlobalID"
+    MSOA_ID = "MSOA21CD"
+    MSOA_NAME = "MSOA21NM"
+    MSOA_WARD_NAME = "MSOA21NMW"
+    LAD_ID = "LAD22CD"
+    LAD_NAME = "LAD22NM"
+    LAD_WARD_NAME = "LAD22NMW"
+    OBJECT_ID = "ObjectId"
 
 
 class OnsOaCsvParser:
@@ -73,19 +73,19 @@ class OnsOaCsvParser:
             self.csv,
             header=0,
             usecols=[
-                OnsOaField.ID,
+                OnsOaField.OA_ID,
                 OnsOaField.LSOA_ID,
-                OnsOaField.LSOA_NAME,
-                OnsOaField.LSOA_WARD_NAME,
+                OnsOaField.MSOA_ID,
+                OnsOaField.LAD_ID,
             ],
         )
 
         rows.rename(
             columns={
-                OnsOaField.ID: db_repr.OnsOaColumnsNames.OID,
+                OnsOaField.OA_ID: db_repr.OnsOaColumnsNames.OID,
                 OnsOaField.LSOA_ID: db_repr.OnsOaColumnsNames.LSOA_ID,
-                OnsOaField.LSOA_NAME: db_repr.OnsOaColumnsNames.LSOA_NAME,
-                OnsOaField.LSOA_WARD_NAME: db_repr.OnsOaColumnsNames.LSOA_WARD_NAME,
+                OnsOaField.MSOA_ID: db_repr.OnsOaColumnsNames.MSOA_ID,
+                OnsOaField.LAD_ID: db_repr.OnsOaColumnsNames.LOCAL_AUTH_DISTRICT_ID,
             },
             inplace=True,
         )

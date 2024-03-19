@@ -38,6 +38,7 @@ class DataOptsConfig:
 
     constituencies: List[str]
     local_authorities: List[str]
+    msoas: List[str]
 
 
 @dataclass
@@ -109,7 +110,7 @@ def parse_config():
             "ons_postcodes_csv": "NSPL21_FEB_2023_UK.csv",
             "os_openname_csv_folder": "os_openname_csv_folder",
             "ons_local_auth_csv": "Local_Authority_Districts_December_2023_Boundaries_UK_BFE_6619220630419597412.csv",
-            "ons_oa_csv": "Output_Areas_2021_EW_BFE_V9_-4867123113532843655.csv",
+            "ons_oa_csv": "Output_Area_to_Lower_layer_Super_Output_Area_to_Middle_layer_Super_Output_Area_to_Local_Authority_District_(December_2021)_Lookup_in_England_and_Wales_v3.csv",
             "ons_msoa_csv": "MSOA_2021_EW_BFE_V7_4158844050038459526.csv",
             "census_age_by_msoa_csv": "Census Age Data by MSOA.csv",
             "census_age_by_oa_csv": "census2021-ts007a-oa.csv",
@@ -127,7 +128,7 @@ def parse_config():
             "max_requests_per_5_mins": 2000,
         }
 
-        config_parser["DATA_OPTS"] = {"constituencies": "", "local_authorities": ""}
+        config_parser["DATA_OPTS"] = {"constituencies": "", "local_authorities": "", "msoas": ""}
 
         with open(CONFIG_FILE, "w") as configfile:
             config_parser.write(configfile)
@@ -187,5 +188,6 @@ def parse_config():
         data_opts=DataOptsConfig(
             constituencies=str(data_opts["constituencies"]).split("|"),
             local_authorities=str(data_opts["local_authorities"]).split("|"),
+            msoas=str(data_opts["msoas"]).split("|")
         ),
     )

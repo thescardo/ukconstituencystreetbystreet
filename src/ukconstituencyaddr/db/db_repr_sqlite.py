@@ -139,6 +139,10 @@ class OnsLocalAuthorityDistrict(Base):
         back_populates="local_authority", lazy="select"
     )
 
+    oas: Mapped[List["OnsOa"]] = relationship(
+        back_populates="local_authority_district", lazy="select"
+    )
+
     def __repr__(self) -> str:
         return self._repr(
             oid=self.oid,
@@ -150,8 +154,8 @@ class OnsLocalAuthorityDistrict(Base):
 class OnsOaColumnsNames(enum.StrEnum):
     OID = "oid"
     LSOA_ID = "lsoa_id"
-    LSOA_NAME = "lsoa_name"
-    LSOA_WARD_NAME = "lsoa_ward_name"
+    MSOA_ID = "msoa_id"
+    LOCAL_AUTH_DISTRICT_ID = "local_auth_district_id"
 
 
 class OnsOa(Base):
@@ -159,19 +163,27 @@ class OnsOa(Base):
 
     oid: Mapped[str] = mapped_column(primary_key=True)
     lsoa_id: Mapped[str]
-    lsoa_name: Mapped[str]
-    lsoa_ward_name: Mapped[str]
+    msoa_id: Mapped[str] = mapped_column(ForeignKey("ons_msoa.oid"))
+    local_auth_district_id: Mapped[str] = mapped_column(
+        ForeignKey("ons_local_auth_district.oid")
+    )
 
     postcodes: Mapped[List["OnsPostcode"]] = relationship(
         back_populates="oa", lazy="select"
+    )
+
+    msoa: Mapped["OnsMsoa"] = relationship(back_populates="oas", lazy="select")
+
+    local_authority_district: Mapped["OnsLocalAuthorityDistrict"] = relationship(
+        back_populates="oas", lazy="select"
     )
 
     def __repr__(self) -> str:
         return self._repr(
             oid=self.oid,
             lsoa_id=self.lsoa_id,
-            lsoa_name=self.lsoa_name,
-            lsoa_ward_name=self.lsoa_ward_name,
+            msoa_id=self.msoa_id,
+            local_auth_district_id=self.local_auth_district_id,
         )
 
 
@@ -189,6 +201,8 @@ class OnsMsoa(Base):
     postcodes: Mapped[List["OnsPostcode"]] = relationship(
         back_populates="msoa", lazy="select"
     )
+
+    oas: Mapped[List["OnsOa"]] = relationship(back_populates="msoa", lazy="select")
 
     def __repr__(self) -> str:
         return self._repr(
