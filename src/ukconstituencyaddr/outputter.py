@@ -350,41 +350,6 @@ class ConstituencyInfoOutputter:
                 dir = self.get_specific_local_authority_folder(name)
                 df.to_csv(str(dir / f"{name} Addresses.csv"))
 
-    def make_csv_postcodes_by_age_local_authority(
-        self,
-        name: Optional[str] = None,
-        id: Optional[str] = None,
-    ):
-        """Make CSV of all addresses in a given local authority"""
-        assert id is not None or name is not None
-        with Session(self.engine) as session:
-            if name is None:
-                name = self.local_authority_parser.get_local_authority(id).name
-
-            base_query = (
-                session.query(db_repr.SimpleAddress)
-                .join(db_repr.OnsPostcode)
-                .join(db_repr.OnsLocalAuthorityDistrict)
-                .where(db_repr.SimpleAddress.thoroughfare_or_desc != None)
-                .where(db_repr.SimpleAddress.thoroughfare_or_desc != "")
-            )
-
-            if id is not None:
-                final_query = base_query.filter(
-                    db_repr.OnsLocalAuthorityDistrict.oid == id
-                )
-            else:
-                final_query = base_query.filter(
-                    db_repr.OnsLocalAuthorityDistrict.name == name
-                )
-
-            df = pd.read_sql(final_query.selectable, self.engine)
-            if len(df.index) == 0:
-                self.logger.debug(f"Found no addresses for local_authority {name}")
-            else:
-                dir = self.get_specific_local_authority_folder(name)
-                df.to_csv(str(dir / f"{name} Addresses.csv"))
-
     def make_csv_postcodes_ranked_by_age_in_constituencies(
         self,
         names: List[str],
@@ -537,6 +502,7 @@ class ConstituencyInfoOutputter:
     def make_csv_addresses_in_msoas(
         self,
         msoa_ids: List[str],
+        remove_flats_and_businesses: bool,
     ):
         """Make CSV of all address and streets in a given MSOA"""
         assert len(msoa_ids) > 0
@@ -554,6 +520,13 @@ class ConstituencyInfoOutputter:
 
             return ''.join(strs)
 
+        def is_flat(row):
+            for x in ["House Name or Number", "Line 1", "Line 2", "Line 3", "Line 4"]:
+                results = re.findall(r'\bapartment[s]*|flat[s]*|apt[s]*|studio[s]*|ltd*\b', row[x], flags=re.IGNORECASE)
+                if len(results) != 0:
+                    return True
+
+            return False
 
         with Session(self.engine) as session:
             msoas: List[db_repr.OnsMsoa] = []
@@ -574,6 +547,7 @@ class ConstituencyInfoOutputter:
                         db_repr.SimpleAddress.line_3,
                         db_repr.SimpleAddress.line_4,
                         db_repr.SimpleAddress.postcode,
+                        db_repr.SimpleAddress.thoroughfare_or_desc,
                         db_repr.CensusAgeByOa.percentage_15_to_34,
                         db_repr.CensusAgeByOa.total_15_to_34
                     )
@@ -593,27 +567,36 @@ class ConstituencyInfoOutputter:
                     "simple_addresses_line_2": "Line 2",
                     "simple_addresses_line_3": "Line 3",
                     "simple_addresses_line_4": "Line 4",
+                    "simple_addresses_thoroughfare_or_desc": "Thoroughfare or Street",
                     "simple_addresses_postcode": "Postcode",
                     "census_age_by_oa_percentage_15_to_34": "% of age 15-34 in Output Area",
                     "census_age_by_oa_total_15_to_34": "Total num 15-34 in Output Area",
                 }
             )
+            if remove_flats_and_businesses:
+                combined_df['is_flat'] = combined_df.apply(is_flat, axis=1)
+                combined_df.drop(combined_df[combined_df["is_flat"] == True].index, inplace=True)
+                combined_df = combined_df.drop("is_flat", axis=1)
+
             combined_df["force_num"] = combined_df.apply(label_num, axis=1)
             combined_df = combined_df.sort_values(
                 [
+                    "% of age 15-34 in Output Area",
+                    "Total num 15-34 in Output Area",
+                    "Thoroughfare or Street",
                     "Postcode",
                     "Line 4",
                     "Line 3",
                     "Line 2",
                     "force_num",
                     "Line 1",
-                    "% of age 15-34 in Output Area",
-                    "Total num 15-34 in Output Area",
                 ],
-                ascending=[True, True, True, True, True, True, False, False],
+                ascending=[False, False, True, True, True, True, True, True, True],
             )
             combined_df = combined_df.round({"census_age_by_oa_percentage_15_to_34": 2})
             combined_df = combined_df.drop("force_num", axis=1)
+
+            streets_list = combined_df["Thoroughfare or Street"].drop_duplicates().reset_index(drop=True)
 
             if len(combined_df.index) == 0:
                 self.logger.debug(f"Found no postcodes for MSOAs {msoa_ids}")
@@ -623,6 +606,13 @@ class ConstituencyInfoOutputter:
                     str(
                         dir
                         / f"MSOAs {'_'.join(msoa_ids)} Addresses {db_repr.CensusAgeRange.R_16_35}.csv"
+                    ),
+                    index=False
+                )
+                streets_list.to_csv(
+                    str(
+                        dir
+                        / f"MSOAs {'_'.join(msoa_ids)} Streets List.csv"
                     ),
                     index=False
                 )
@@ -771,7 +761,7 @@ def output_csvs():
                     comb.make_csv_streets_in_local_authority(name=local_authority)
                     comb.make_csv_addresses_in_local_authority(name=local_authority)
             elif args.msoa:
-                comb.make_csv_addresses_in_msoas(data_opts.msoas)
+                comb.make_csv_addresses_in_msoas(data_opts.msoas, remove_flats_and_businesses=True)
             return
 
         if args.postcodes_by_age:
