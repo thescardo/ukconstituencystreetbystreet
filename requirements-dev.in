@@ -3,3 +3,5 @@ ruff
 black
 isort
 types-requests
+types-tqdm
+pytest

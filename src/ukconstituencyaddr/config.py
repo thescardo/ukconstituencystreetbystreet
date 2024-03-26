@@ -6,13 +6,14 @@ import configparser
 import logging
 import pathlib
 from dataclasses import dataclass
+from typing import List
 
 # Create a default folder
 MAIN_STORAGE_FOLDER = pathlib.Path("streetcheck_storage").absolute().resolve()
 CONFIG_FILE = MAIN_STORAGE_FOLDER / "config.ini"
 
 config_parser = configparser.ConfigParser()
-config: "RootConfigClass"
+conf: "RootConfigClass"
 
 
 def init_loggers():
@@ -32,18 +33,34 @@ def init_loggers():
 
 
 @dataclass
+class DataOptsConfig:
+    """Data manipulation configuration"""
+
+    constituencies: List[str]
+    local_authorities: List[str]
+    msoas: List[str]
+
+
+@dataclass
 class InputConfig:
     """Input file locations configuration"""
+
     folders_for_csv: pathlib.Path
     royal_mail_paf_csv: pathlib.Path
     ons_constituencies_csv: pathlib.Path
     ons_postcodes_csv: pathlib.Path
     os_openname_csv_folder: pathlib.Path
+    ons_local_auth_csv: pathlib.Path
+    ons_oa_csv: pathlib.Path
+    ons_msoa_csv: pathlib.Path
+    census_age_by_msoa_csv: pathlib.Path
+    census_age_by_oa_csv: pathlib.Path
 
 
 @dataclass
 class OutputConfig:
     """Output folder locations configuration"""
+
     output_folder: pathlib.Path
     use_subfolders: bool
 
@@ -51,6 +68,9 @@ class OutputConfig:
 @dataclass
 class AddressDownloadConfig:
     """Config to download address data from getaddress.io"""
+
+    allow_getting_full_address: bool
+    max_requests_per_5_mins: int
     get_address_io_api_key: str
     get_address_io_admin_key: str
 
@@ -58,6 +78,8 @@ class AddressDownloadConfig:
 @dataclass
 class RootConfigClass:
     """Root container for all config for easy of access to rest of the program"""
+
+    data_opts: DataOptsConfig
     input: InputConfig
     output: OutputConfig
     scraping: AddressDownloadConfig
@@ -86,6 +108,12 @@ def parse_config():
             "(December_2022)_Names_and_Codes"
             "_in_the_United_Kingdom.csv",
             "ons_postcodes_csv": "NSPL21_FEB_2023_UK.csv",
+            "os_openname_csv_folder": "os_openname_csv_folder",
+            "ons_local_auth_csv": "Local_Authority_Districts_December_2023_Boundaries_UK_BFE_6619220630419597412.csv",
+            "ons_oa_csv": "Output_Area_to_Lower_layer_Super_Output_Area_to_Middle_layer_Super_Output_Area_to_Local_Authority_District_(December_2021)_Lookup_in_England_and_Wales_v3.csv",
+            "ons_msoa_csv": "MSOA_2021_EW_BFE_V7_4158844050038459526.csv",
+            "census_age_by_msoa_csv": "Census Age Data by MSOA.csv",
+            "census_age_by_oa_csv": "census2021-ts007a-oa.csv",
         }
 
         config_parser["OUTPUT"] = {
@@ -94,9 +122,13 @@ def parse_config():
         }
 
         config_parser["SCRAPING"] = {
+            "allow_getting_full_address": "no",
             "get_address_io_api_key": "",
             "get_address_io_admin_key": "",
+            "max_requests_per_5_mins": 2000,
         }
+
+        config_parser["DATA_OPTS"] = {"constituencies": "", "local_authorities": "", "msoas": ""}
 
         with open(CONFIG_FILE, "w") as configfile:
             config_parser.write(configfile)
@@ -104,6 +136,7 @@ def parse_config():
     input_conf = config_parser["INPUT"]
     output_conf = config_parser["OUTPUT"]
     scraping_conf = config_parser["SCRAPING"]
+    data_opts = config_parser["DATA_OPTS"]
 
     # Convert if necessary to pathlip.Path
     folder_for_csvs_raw = input_conf["folder_for_csvs"]
@@ -114,8 +147,8 @@ def parse_config():
 
     # Read all config and convert it to correct types for easy of use in the
     # rest of the program
-    global config
-    config = RootConfigClass(
+    global conf
+    conf = RootConfigClass(
         input=InputConfig(
             folders_for_csv=folder_for_csvs,
             royal_mail_paf_csv=(
@@ -127,14 +160,34 @@ def parse_config():
             ons_postcodes_csv=(
                 folder_for_csvs / input_conf["ons_postcodes_csv"]
             ).resolve(),
-            os_openname_csv_folder=pathlib.Path(input_conf["openname_csv_folder"]),
+            os_openname_csv_folder=pathlib.Path(input_conf["os_openname_csv_folder"]),
+            ons_local_auth_csv=(
+                folder_for_csvs / input_conf["ons_local_auth_csv"]
+            ).resolve(),
+            ons_oa_csv=(folder_for_csvs / input_conf["ons_oa_csv"]).resolve(),
+            ons_msoa_csv=(folder_for_csvs / input_conf["ons_msoa_csv"]).resolve(),
+            census_age_by_msoa_csv=(
+                folder_for_csvs / input_conf["census_age_by_msoa_csv"]
+            ).resolve(),
+            census_age_by_oa_csv=(
+                folder_for_csvs / input_conf["census_age_by_oa_csv"]
+            ).resolve(),
         ),
         output=OutputConfig(
             output_folder=pathlib.Path(output_conf["output_folder"]).resolve(),
             use_subfolders=output_conf.getboolean("use_subfolders"),
         ),
         scraping=AddressDownloadConfig(
+            allow_getting_full_address=scraping_conf.getboolean(
+                "allow_getting_full_address"
+            ),
             get_address_io_api_key=scraping_conf["get_address_io_api_key"],
             get_address_io_admin_key=scraping_conf["get_address_io_admin_key"],
+            max_requests_per_5_mins=int(scraping_conf["max_requests_per_5_mins"]),
+        ),
+        data_opts=DataOptsConfig(
+            constituencies=str(data_opts["constituencies"]).split("|"),
+            local_authorities=str(data_opts["local_authorities"]).split("|"),
+            msoas=str(data_opts["msoas"]).split("|")
         ),
     )

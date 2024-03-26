@@ -42,3 +42,5 @@ tzdata==2023.3
     # via pandas
 urllib3==2.0.4
     # via requests
+uvloop==0.19.0
+    # via ukconstuencystreetcheck (pyproject.toml)

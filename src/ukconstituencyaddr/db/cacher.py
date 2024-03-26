@@ -19,9 +19,16 @@ class CsvName(enum.StrEnum):
     OnsPostcode = "ons_postcode_csv"
     RoyalMailPaf = "royal_mail_paf_csv"
     OsOpennamesRoad = "os_opennames_roads"
+    OnsLocalAuthorityDistrict = "ons_local_auth_csv"
+    OnsMsoa = "ons_msoa_csv"
+    OnsOa = "ons_oa_csv"
+    CensusAgeByMsoa = "census_age_by_msoa_csv"
+    CensusAgeByOa = "census_age_by_oa_csv"
 
 
 class DbCache:
+    """Stores how recently the CSV in the database has been modified"""
+
     def __init__(self) -> None:
         self.engine = get_engine()
         self.session = Session(self.engine)
@@ -32,34 +39,44 @@ class DbCache:
         Base.metadata.create_all(bind=self.engine)
 
     @wrap_session
-    def check_and_set_file_modified(self, file_id: CsvName, file: pathlib.Path) -> bool:
+    def check_file_modified(self, file_id: CsvName, file: pathlib.Path) -> bool:
         self.logger.debug("Checking file modified time of file_id")
         row = self.session.get(CsvFilesModified, file_id.value)
         modified_time = datetime.fromtimestamp(os.path.getmtime(file))
+
         if row is None:
             self.logger.debug(f"No row found for {file_id=} {file=}")
+            return True
+
+        if row.filename != str(file) or row.modified != modified_time:
+            self.logger.debug(f"File has been modified {file_id=} {file=}")
+            return True
+
+        self.logger.debug(f"File has not been modified {file_id=} {file=}")
+        return False
+
+    def set_file_modified(self, file_id: CsvName, file: pathlib.Path) -> None:
+        self.logger.debug("Setting file modified time of file_id")
+        row = self.session.get(CsvFilesModified, file_id.value)
+        modified_time = datetime.fromtimestamp(os.path.getmtime(file))
+
+        if row is None:
             self.session.add(
                 CsvFilesModified(
                     name=file_id.value, filename=str(file), modified=modified_time
                 )
             )
-            self.session.flush()
-            self.session.commit()
-            return True
-
-        if row.filename != str(file):
+        else:
             row.filename = str(file)
-        if row.modified != modified_time:
             row.modified = modified_time
 
-        if row in self.session.dirty:
-            self.session.flush()
-            self.session.commit()
-            self.logger.debug(f"File has been modified {file_id=} {file=}")
-            return True
-        else:
-            self.logger.debug(f"File has not been modified {file_id=} {file=}")
-            return False
+        self.session.flush()
+        self.session.commit()
+
+    def check_and_set_file_modified(self, file_id: CsvName, file: pathlib.Path) -> bool:
+        check = self.check_file_modified(file_id, file)
+        self.set_file_modified(file_id, file)
+        return check
 
     @wrap_session
     def clear_file_modified(self, file_id: CsvName):
