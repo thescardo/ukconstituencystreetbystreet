@@ -50,11 +50,14 @@ class InputConfig:
     ons_constituencies_csv: pathlib.Path
     ons_postcodes_csv: pathlib.Path
     os_openname_csv_folder: pathlib.Path
+    os_open_roads_geopackage: pathlib.Path
     ons_local_auth_csv: pathlib.Path
     ons_oa_csv: pathlib.Path
     ons_msoa_csv: pathlib.Path
+    ons_msoa_readble_names_csv: pathlib.Path
     census_age_by_msoa_csv: pathlib.Path
     census_age_by_oa_csv: pathlib.Path
+    ons_msoa_geojson: pathlib.Path
 
 
 @dataclass
@@ -109,11 +112,14 @@ def parse_config():
             "_in_the_United_Kingdom.csv",
             "ons_postcodes_csv": "NSPL21_FEB_2023_UK.csv",
             "os_openname_csv_folder": "os_openname_csv_folder",
+            "os_open_roads_geopackage": "oproad_gb.gpkg",
             "ons_local_auth_csv": "Local_Authority_Districts_December_2023_Boundaries_UK_BFE_6619220630419597412.csv",
             "ons_oa_csv": "Output_Area_to_Lower_layer_Super_Output_Area_to_Middle_layer_Super_Output_Area_to_Local_Authority_District_(December_2021)_Lookup_in_England_and_Wales_v3.csv",
             "ons_msoa_csv": "MSOA_2021_EW_BFE_V7_4158844050038459526.csv",
             "census_age_by_msoa_csv": "Census Age Data by MSOA.csv",
             "census_age_by_oa_csv": "census2021-ts007a-oa.csv",
+            "ons_msoa_geojson": "MSOA_2021_EW_BGC_V2_1370945015033551734.geojson",
+            "": "MSOA-Names-2.2.csv",
         }
 
         config_parser["OUTPUT"] = {
@@ -128,7 +134,11 @@ def parse_config():
             "max_requests_per_5_mins": 2000,
         }
 
-        config_parser["DATA_OPTS"] = {"constituencies": "", "local_authorities": "", "msoas": ""}
+        config_parser["DATA_OPTS"] = {
+            "constituencies": "",
+            "local_authorities": "",
+            "msoas": "",
+        }
 
         with open(CONFIG_FILE, "w") as configfile:
             config_parser.write(configfile)
@@ -161,6 +171,9 @@ def parse_config():
                 folder_for_csvs / input_conf["ons_postcodes_csv"]
             ).resolve(),
             os_openname_csv_folder=pathlib.Path(input_conf["os_openname_csv_folder"]),
+            os_open_roads_geopackage=(
+                folder_for_csvs / input_conf["os_open_roads_geopackage"]
+            ).resolve(),
             ons_local_auth_csv=(
                 folder_for_csvs / input_conf["ons_local_auth_csv"]
             ).resolve(),
@@ -171,6 +184,9 @@ def parse_config():
             ).resolve(),
             census_age_by_oa_csv=(
                 folder_for_csvs / input_conf["census_age_by_oa_csv"]
+            ).resolve(),
+            ons_msoa_geojson=(
+                folder_for_csvs / input_conf["ons_msoa_geojson"]
             ).resolve(),
         ),
         output=OutputConfig(
@@ -188,6 +204,6 @@ def parse_config():
         data_opts=DataOptsConfig(
             constituencies=str(data_opts["constituencies"]).split("|"),
             local_authorities=str(data_opts["local_authorities"]).split("|"),
-            msoas=str(data_opts["msoas"]).split("|")
+            msoas=str(data_opts["msoas"]).split("|"),
         ),
     )

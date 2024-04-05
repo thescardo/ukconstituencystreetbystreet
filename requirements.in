@@ -3,5 +3,10 @@ cython
 SQLAlchemy
 pandas
 requests
-free-proxy
 uvloop
+scikit-learn
+geojson
+shapely
+geopandas
+pyogrio
+openpyxl

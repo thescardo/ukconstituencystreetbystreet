@@ -4,36 +4,84 @@
 #
 #    pip-compile --output-file=requirements.txt pyproject.toml
 #
+attrs==23.2.0
+    # via fiona
 certifi==2023.7.22
-    # via requests
+    # via
+    #   fiona
+    #   pyogrio
+    #   pyproj
+    #   requests
 charset-normalizer==3.2.0
     # via requests
+click==8.1.7
+    # via
+    #   click-plugins
+    #   cligj
+    #   fiona
+click-plugins==1.1.1
+    # via fiona
+cligj==0.7.2
+    # via fiona
 cython==3.0.0
     # via ukconstuencystreetcheck (pyproject.toml)
-free-proxy==1.1.1
+et-xmlfile==1.1.0
+    # via openpyxl
+fiona==1.9.6
+    # via geopandas
+geojson==3.1.0
+    # via ukconstuencystreetcheck (pyproject.toml)
+geopandas==0.14.3
     # via ukconstuencystreetcheck (pyproject.toml)
 greenlet==2.0.2
     # via sqlalchemy
 idna==3.4
     # via requests
-lxml==4.9.3
-    # via free-proxy
+joblib==1.3.2
+    # via scikit-learn
 numpy==1.25.2
-    # via pandas
-pandas==2.0.3
+    # via
+    #   pandas
+    #   pyogrio
+    #   scikit-learn
+    #   scipy
+    #   shapely
+openpyxl==3.1.2
     # via ukconstuencystreetcheck (pyproject.toml)
+packaging==24.0
+    # via
+    #   geopandas
+    #   pyogrio
+pandas==2.0.3
+    # via
+    #   geopandas
+    #   ukconstuencystreetcheck (pyproject.toml)
+pyogrio==0.7.2
+    # via ukconstuencystreetcheck (pyproject.toml)
+pyproj==3.6.1
+    # via geopandas
 python-dateutil==2.8.2
     # via pandas
 pytz==2023.3
     # via pandas
 requests==2.31.0
+    # via ukconstuencystreetcheck (pyproject.toml)
+scikit-learn==1.4.1.post1
+    # via ukconstuencystreetcheck (pyproject.toml)
+scipy==1.13.0
+    # via scikit-learn
+shapely==2.0.3
     # via
-    #   free-proxy
+    #   geopandas
     #   ukconstuencystreetcheck (pyproject.toml)
 six==1.16.0
-    # via python-dateutil
+    # via
+    #   fiona
+    #   python-dateutil
 sqlalchemy==2.0.19
     # via ukconstuencystreetcheck (pyproject.toml)
+threadpoolctl==3.4.0
+    # via scikit-learn
 tqdm==4.66.1
     # via ukconstuencystreetcheck (pyproject.toml)
 typing-extensions==4.7.1

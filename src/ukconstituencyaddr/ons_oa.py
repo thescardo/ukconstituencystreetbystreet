@@ -52,7 +52,7 @@ class OnsOaCsvParser:
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
-        self.csv_name = cacher.CsvName.OnsOa
+        self.csv_name = cacher.DatafileName.OnsOa
 
         self.engine = db_repr.get_engine()
 
@@ -147,7 +147,7 @@ class CensusAgeByOaCsvParser:
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
-        self.csv_name = cacher.CsvName.CensusAgeByMsoa
+        self.csv_name = cacher.DatafileName.CensusAgeByMsoa
 
         self.engine = db_repr.get_engine()
 

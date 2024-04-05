@@ -32,7 +32,7 @@ class ConstituencyCsvParser:
             raise Exception(f"CSV file not at {self.csv}")
 
         self.engine = db_repr.get_engine()
-        self.csv_name = cacher.CsvName.OnsConstituency
+        self.csv_name = cacher.DatafileName.OnsConstituency
 
         self.constituency_cache: Dict[str, db_repr.OnsConstituency] = {}
         self.constituency_by_name: Dict[str, db_repr.OnsConstituency] = {}

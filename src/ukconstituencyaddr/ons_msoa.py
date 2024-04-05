@@ -7,25 +7,43 @@ https://geoportal.statistics.gov.uk/datasets/ons::local-authority-districts-dece
 
 https://www.ons.gov.uk/census/maps/choropleth/population/age/resident-age-8c/aged-15-to-24-years
 
+For the readble names
+https://houseofcommonslibrary.github.io/msoanames/
+
 Filtered by msoa
 
 MSOA = "msoa21"
 """
 
 
+from copy import copy
 import enum
+import json
 import logging
-from typing import Optional
+from typing import List, Optional
 
+import geojson
+from matplotlib import cm, pyplot as plt
+import openpyxl
+import openpyxl.drawing.image
+from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.styles.borders import Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
 import pandas as pd
-import numpy as np
-from sqlalchemy import select
+import geopandas as gpd
+from sklearn.cluster import KMeans
 from sqlalchemy.orm import Session
+from shapely.geometry import Point, shape, LineString, MultiLineString
+from shapely import ops
+import numpy as np
+from matplotlib.path import Path
+from matplotlib.patches import PathPatch
+from matplotlib.collections import PatchCollection
 
-from ukconstituencyaddr import ons_constituencies
 from ukconstituencyaddr import config
 from ukconstituencyaddr.db import cacher
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+from ukconstituencyaddr.openpyxl_helpers import set_border
 
 
 class OnsMsoaField(enum.StrEnum):
@@ -34,13 +52,24 @@ class OnsMsoaField(enum.StrEnum):
     ENTRY_ID = "FID"
     ID = "MSOA21CD"
     NAME = "MSOA21NM"
-    BNG_E = "BNG_E"
-    BNG_N = "BNG_N"
+    GB_OS_EASTING = "BNG_E"
+    GB_OS_NORTHING = "BNG_N"
     LONGITUDE = "LONG"
     LATITUDE = "LAT"
     SHAPE_AREA = "Shape__Area"
     SHAPE_LENGTH = "Shape__Length"
     GLOBAL_ID = "GlobalID"
+
+class OnsMsoaReadableNamesField(enum.StrEnum):
+    """Enum to match fields to headers in the CSV"""
+
+    ID = "MSOA21CD"
+    NAME = "MSOA21NM"
+    NAME_W = "MSOA21NMW"
+    READABLE_NAME = "msoa21hclnm"
+    READABLE_NAME_W = "msoa21hclnm"
+    LOCAL_AUTHORITY_NAME = "localauthorityname"
+    TYPE = "type"
 
 
 class OnsMsoaCsvParser:
@@ -50,10 +79,14 @@ class OnsMsoaCsvParser:
         self,
     ) -> None:
         self.csv = config.conf.input.ons_msoa_csv
-        if not self.csv.exists():
-            raise Exception(f"CSV file not at {self.csv}")
+        self.readable_name_csv = config.conf.input.ons_msoa_readble_names_csv
+        self.geojson = config.conf.input.ons_msoa_geojson
 
-        self.csv_name = cacher.CsvName.OnsMsoa
+        for file in [self.csv, self.geojson, self.readable_name_csv]:
+            if not file.exists():
+                raise Exception(f"File not at {file}")
+
+        self.csv_name = cacher.DatafileName.OnsMsoaCsv
 
         self.engine = db_repr.get_engine()
 
@@ -63,9 +96,15 @@ class OnsMsoaCsvParser:
 
     def process_csv(self):
         """Reads the CSV into the database"""
-        modified = cacher.DbCacheInst.check_file_modified(self.csv_name, self.csv)
-        if not modified:
-            self.logger.info("Already parsed CSV file and placed into db")
+        csv_modified = cacher.DbCacheInst.check_file_modified(cacher.DatafileName.OnsMsoaCsv, self.csv)
+        geojson_modified = cacher.DbCacheInst.check_file_modified(
+            cacher.DatafileName.OnsMsoaGeoJson, self.geojson
+        )
+        readable_name_modified = cacher.DbCacheInst.check_file_modified(
+            cacher.DatafileName.OnsMsoaReadableNames, self.readable_name_csv
+        )
+        if not csv_modified and not geojson_modified and not readable_name_modified:
+            self.logger.info("Already parsed CSV and geojson files and placed into db")
             return
 
         self.logger.info("Parsing ONS MSOA file")
@@ -73,31 +112,62 @@ class OnsMsoaCsvParser:
         rows = pd.read_csv(
             self.csv,
             header=0,
+            dtype={
+                OnsMsoaField.GB_OS_EASTING: int,
+                OnsMsoaField.GB_OS_NORTHING: int,
+                OnsMsoaField.SHAPE_AREA: float,
+                OnsMsoaField.SHAPE_LENGTH: float,
+            },
             usecols=[
                 OnsMsoaField.ID,
                 OnsMsoaField.NAME,
+                OnsMsoaField.GB_OS_EASTING,
+                OnsMsoaField.GB_OS_NORTHING,
+                OnsMsoaField.SHAPE_AREA,
+                OnsMsoaField.SHAPE_LENGTH,
             ],
-        )
+        ).set_index(OnsMsoaField.ID)
+
+        # Create empty column for geometry
+        rows[db_repr.OnsMsoaColumnsNames.GEOMETRY] = ""
+
+        # Add geometry to each entry
+        with open(self.geojson) as f:
+            msoa_geojson = geojson.load(f)
+
+        msoa_geojson_features = msoa_geojson["features"]
+        # Get all geometry objects and add to the dataframe
+        for x in msoa_geojson_features:
+            msoa_id = x["properties"][OnsMsoaField.ID]
+            if msoa_id in rows.index:
+                rows.at[msoa_id, db_repr.OnsMsoaColumnsNames.GEOMETRY] = geojson.dumps(
+                    x["geometry"]
+                )
 
         rows.rename(
             columns={
                 OnsMsoaField.ID: db_repr.OnsMsoaColumnsNames.OID,
                 OnsMsoaField.NAME: db_repr.OnsMsoaColumnsNames.NAME,
+                OnsMsoaField.GB_OS_EASTING: db_repr.OnsMsoaColumnsNames.GB_OS_EASTING,
+                OnsMsoaField.GB_OS_NORTHING: db_repr.OnsMsoaColumnsNames.GB_OS_NORTHING,
+                OnsMsoaField.SHAPE_AREA: db_repr.OnsMsoaColumnsNames.SHAPE_AREA,
+                OnsMsoaField.SHAPE_LENGTH: db_repr.OnsMsoaColumnsNames.SHAPE_LENGTH,
             },
             inplace=True,
         )
-
-        # print(rows[rows.duplicated(subset=[db_repr.OnsMsoaColumnsNames.ID], keep=False)])
+        rows.index.names = [db_repr.OnsMsoaColumnsNames.OID]
 
         rows.to_sql(
             db_repr.OnsMsoa.__tablename__,
             self.engine,
             if_exists="append",
-            index=False,
+            index=True,
             chunksize=100000,
         )
 
-        cacher.DbCacheInst.set_file_modified(self.csv_name, self.csv)
+        cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaCsv, self.csv)
+        cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaGeoJson, self.geojson)
+        cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaReadableNames, self.readable_name_csv)
 
         self.logger.info(
             f"Finished parsing ONS MSOA file, wrote {len(rows.index)} items"
@@ -143,7 +213,7 @@ class CensusAgeByMsoaCsvParser:
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
-        self.csv_name = cacher.CsvName.CensusAgeByMsoa
+        self.csv_name = cacher.DatafileName.CensusAgeByMsoa
 
         self.engine = db_repr.get_engine()
 
@@ -250,3 +320,174 @@ class CensusAgeByMsoaCsvParser:
             session.query(db_repr.CensusAgeByMsoa).delete()
             session.commit()
             cacher.DbCacheInst.clear_file_modified(self.csv_name)
+
+
+def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
+    """
+    This is a monolithic function that produces an image, csv and spreadsheet
+    for a MSOA
+
+    TODO break down into more readable function
+    """
+    with Session(db_repr.get_engine()) as session:
+        msoa = (
+            session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.oid == msoa_id).one()
+        )
+
+        msoa_dir = msoa_parent_dir / f"{msoa_id}_{msoa.name}"
+        msoa_dir.mkdir(exist_ok=True)
+
+        geometry = json.loads(msoa.geometry)
+        msoa_shape = shape(geometry)
+
+        # Read road shape data based on bounds of MSOA
+        data = gpd.read_file(
+            config.conf.input.os_open_roads_geopackage,
+            engine="pyogrio",
+            layer="road_link",
+            bbox=msoa_shape.bounds,
+        )
+
+        # We used square bounds, so now check if every line actually intersects with the MSOA
+
+        rslt_df = data[
+            data["geometry"].apply(lambda x: x.intersects(msoa_shape))
+        ].reset_index(drop=True)
+        rslt_df.to_csv("test.csv")
+
+        # Find the centroids of each line
+        rslt_df = rslt_df[["road_classification_number", "name_1", "geometry"]].copy()
+        rslt_df = rslt_df.dropna(
+            subset=["road_classification_number", "name_1"], how="all"
+        ).reset_index(drop=True)
+
+        def combine(input: List[LineString] | gpd.GeoSeries) -> LineString:
+            input_list = []
+            if isinstance(input, gpd.GeoSeries):
+                input_list = list(input.array)
+            else:
+                input_list = input
+
+            multi_line = MultiLineString(input_list)
+            merged_line = ops.linemerge(multi_line)
+            if isinstance(merged_line, LineString):
+                return merged_line
+            else:
+                return multi_line
+
+        rslt_df = (
+            rslt_df.groupby(["name_1", "road_classification_number"], dropna=False)[
+                "geometry"
+            ]
+            .apply(combine)
+            .reset_index()
+        )
+        rslt_df["centroid"] = rslt_df["geometry"].apply(lambda x: x.centroid)
+
+        # Convert the list of centroids to tuples of points so that we can use them in scikit
+        points = []
+        for _, item in rslt_df.iterrows():
+            centroid: Point = item["centroid"]
+            points.append((centroid.x, centroid.y))
+
+        # Train using rough correct number of 'buckets'
+        num_clusters = int(len(points) / 10)
+        kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(points)
+
+        # Create colour mapping for diagram
+        color = cm.rainbow(np.linspace(0, 1, num_clusters))
+        color_mapping = {x: color[x] for x in range(len(color))}
+
+        # Plot centers
+        centers = kmeans.cluster_centers_
+        plt.scatter(centers[:, 0], centers[:, 1], c="black", s=200, alpha=0.5)
+
+        y_kmeans = kmeans.predict(points)
+
+        # Plot on a map
+        for idx, item in rslt_df.iterrows():
+            this_shape: LineString | MultiLineString = item["geometry"]
+
+            if isinstance(this_shape, MultiLineString):
+                lines = this_shape.geoms
+            else:
+                lines = [this_shape]
+            for line in lines:
+                x, y = line.coords.xy
+            plt.plot(x, y, c=color_mapping[y_kmeans[idx]])
+
+        # Labelling of plot and save to file
+        x, y = msoa_shape.exterior.xy
+        plt.plot(x, y, c="black")
+        plt.title(f"MSOA ID {msoa_id}")
+        plt.axis("off")
+        image_file = msoa_dir / f"{msoa_id} {msoa.name} road clusters.png"
+        plt.savefig(image_file)
+
+        # Sorting to save to csv
+        rslt_df["cluster_number"] = y_kmeans
+        rslt_df = rslt_df.drop(["geometry", "centroid"], axis=1)
+        rslt_df = rslt_df.sort_values(
+            ["cluster_number", "name_1", "road_classification_number"],
+            ascending=[True, True, True],
+        ).reset_index(drop=True)
+
+        # Cluster index needs changing to 
+        rslt_df["cluster_number"] = rslt_df["cluster_number"].apply(lambda x: x + 1)
+        rslt_df.rename(
+            columns={
+                "cluster_number": "Cluster",
+                "name_1": "Road name",
+                "road_classification_number": "Road classification or number",
+            },
+            inplace=True,
+        )
+
+        # Save to csv
+        csv_file = msoa_dir / f"{msoa_id} {msoa.name} road clusters.csv"
+        rslt_df.to_csv(csv_file, index=False)
+
+        # Create the excel workbook
+        workbook = openpyxl.Workbook()
+        sheet: Worksheet = workbook.active
+
+        sheet.title = msoa.name
+
+        rows = dataframe_to_rows(rslt_df, index=False)
+
+        for r_idx, row in enumerate(rows, 1):
+            for c_idx, value in enumerate(row, 1):
+                sheet.cell(row=r_idx, column=c_idx, value=value)
+
+        dims = {}
+        for row in sheet.rows:
+            for cell in row:
+                if cell.value:
+                    dims[cell.column_letter] = max(
+                        (dims.get(cell.column_letter, 0), len(str(cell.value)))
+                    )
+        for col, value in dims.items():
+            sheet.column_dimensions[col].width = value
+
+        sheet.cell(row=1, column=4).value="Canvassed"
+
+        header_side = Side(style="medium")
+        for x in range(1, 5):
+            sheet.cell(row=1, column=x).border = Border(left=header_side, right=header_side, top=header_side, bottom=header_side)
+
+        number_of_each_cluster = rslt_df.groupby(["Cluster"]).size()
+
+        current_row_idx = 2
+        columns = ["A", "B", "C", "D"]
+        for idx, val in number_of_each_cluster.items():
+            for col in columns:
+                cell_range = f"{col}{current_row_idx}:{col}{current_row_idx+val - 1}"
+                set_border(sheet, cell_range, style="thin")
+            current_row_idx += val
+
+        sheet["F1"] = f"MSOA ID {msoa_id} {msoa.name}"
+        img = openpyxl.drawing.image.Image(image_file)
+        sheet.add_image(img, 'F2')
+
+        workbook_file = msoa_dir / f"{msoa_id} {msoa.name} road clusters.xlsx"
+        workbook.save(filename=workbook_file)

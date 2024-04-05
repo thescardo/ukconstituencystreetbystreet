@@ -147,7 +147,7 @@ class PostcodeCsvParser:
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
-        self.csv_name = cacher.CsvName.OnsPostcode
+        self.csv_name = cacher.DatafileName.OnsPostcode
 
         self.engine = db_repr.get_engine()
 
