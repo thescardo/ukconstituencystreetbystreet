@@ -32,6 +32,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 import pandas as pd
 import geopandas as gpd
 from sklearn.cluster import KMeans
+import sqlalchemy.exc
 from sqlalchemy.orm import Session
 from shapely.geometry import Point, shape, LineString, MultiLineString
 from shapely import ops
@@ -46,26 +47,12 @@ from ukconstituencyaddr.db import db_repr_sqlite as db_repr
 from ukconstituencyaddr.openpyxl_helpers import set_border
 
 
-class OnsMsoaField(enum.StrEnum):
+class OnsMsoaReadableField(enum.StrEnum):
     """Enum to match fields to headers in the CSV"""
 
-    ENTRY_ID = "FID"
-    ID = "MSOA21CD"
-    NAME = "MSOA21NM"
-    GB_OS_EASTING = "BNG_E"
-    GB_OS_NORTHING = "BNG_N"
-    LONGITUDE = "LONG"
-    LATITUDE = "LAT"
-    SHAPE_AREA = "Shape__Area"
-    SHAPE_LENGTH = "Shape__Length"
-    GLOBAL_ID = "GlobalID"
-
-class OnsMsoaReadableNamesField(enum.StrEnum):
-    """Enum to match fields to headers in the CSV"""
-
-    ID = "MSOA21CD"
-    NAME = "MSOA21NM"
-    NAME_W = "MSOA21NMW"
+    ID = "msoa21cd"
+    NAME = "msoa21nm"
+    NAME_W = "msoa21nmw"
     READABLE_NAME = "msoa21hclnm"
     READABLE_NAME_W = "msoa21hclnm"
     LOCAL_AUTHORITY_NAME = "localauthorityname"
@@ -78,15 +65,12 @@ class OnsMsoaCsvParser:
     def __init__(
         self,
     ) -> None:
-        self.csv = config.conf.input.ons_msoa_csv
-        self.readable_name_csv = config.conf.input.ons_msoa_readble_names_csv
+        self.csv = config.conf.input.ons_msoa_readble_names_csv
         self.geojson = config.conf.input.ons_msoa_geojson
 
-        for file in [self.csv, self.geojson, self.readable_name_csv]:
+        for file in [self.geojson, self.csv]:
             if not file.exists():
                 raise Exception(f"File not at {file}")
-
-        self.csv_name = cacher.DatafileName.OnsMsoaCsv
 
         self.engine = db_repr.get_engine()
 
@@ -96,14 +80,13 @@ class OnsMsoaCsvParser:
 
     def process_csv(self):
         """Reads the CSV into the database"""
-        csv_modified = cacher.DbCacheInst.check_file_modified(cacher.DatafileName.OnsMsoaCsv, self.csv)
         geojson_modified = cacher.DbCacheInst.check_file_modified(
             cacher.DatafileName.OnsMsoaGeoJson, self.geojson
         )
         readable_name_modified = cacher.DbCacheInst.check_file_modified(
-            cacher.DatafileName.OnsMsoaReadableNames, self.readable_name_csv
+            cacher.DatafileName.OnsMsoaReadableNames, self.csv
         )
-        if not csv_modified and not geojson_modified and not readable_name_modified:
+        if not geojson_modified and not readable_name_modified:
             self.logger.info("Already parsed CSV and geojson files and placed into db")
             return
 
@@ -112,24 +95,17 @@ class OnsMsoaCsvParser:
         rows = pd.read_csv(
             self.csv,
             header=0,
-            dtype={
-                OnsMsoaField.GB_OS_EASTING: int,
-                OnsMsoaField.GB_OS_NORTHING: int,
-                OnsMsoaField.SHAPE_AREA: float,
-                OnsMsoaField.SHAPE_LENGTH: float,
-            },
             usecols=[
-                OnsMsoaField.ID,
-                OnsMsoaField.NAME,
-                OnsMsoaField.GB_OS_EASTING,
-                OnsMsoaField.GB_OS_NORTHING,
-                OnsMsoaField.SHAPE_AREA,
-                OnsMsoaField.SHAPE_LENGTH,
+                OnsMsoaReadableField.ID,
+                OnsMsoaReadableField.NAME,
+                OnsMsoaReadableField.READABLE_NAME,
             ],
-        ).set_index(OnsMsoaField.ID)
+        ).set_index(OnsMsoaReadableField.ID)
 
         # Create empty column for geometry
         rows[db_repr.OnsMsoaColumnsNames.GEOMETRY] = ""
+        rows[db_repr.OnsMsoaColumnsNames.GB_OS_EASTING] = 0
+        rows[db_repr.OnsMsoaColumnsNames.GB_OS_NORTHING] = 0
 
         # Add geometry to each entry
         with open(self.geojson) as f:
@@ -138,20 +114,21 @@ class OnsMsoaCsvParser:
         msoa_geojson_features = msoa_geojson["features"]
         # Get all geometry objects and add to the dataframe
         for x in msoa_geojson_features:
-            msoa_id = x["properties"][OnsMsoaField.ID]
+            msoa_id = x["properties"]["MSOA21CD"]
+            easting = x["properties"]["BNG_E"]
+            northing = x["properties"]["BNG_N"]
             if msoa_id in rows.index:
                 rows.at[msoa_id, db_repr.OnsMsoaColumnsNames.GEOMETRY] = geojson.dumps(
                     x["geometry"]
                 )
+                rows.at[msoa_id, db_repr.OnsMsoaColumnsNames.GB_OS_EASTING] = easting
+                rows.at[msoa_id, db_repr.OnsMsoaColumnsNames.GB_OS_NORTHING] = northing
 
         rows.rename(
             columns={
-                OnsMsoaField.ID: db_repr.OnsMsoaColumnsNames.OID,
-                OnsMsoaField.NAME: db_repr.OnsMsoaColumnsNames.NAME,
-                OnsMsoaField.GB_OS_EASTING: db_repr.OnsMsoaColumnsNames.GB_OS_EASTING,
-                OnsMsoaField.GB_OS_NORTHING: db_repr.OnsMsoaColumnsNames.GB_OS_NORTHING,
-                OnsMsoaField.SHAPE_AREA: db_repr.OnsMsoaColumnsNames.SHAPE_AREA,
-                OnsMsoaField.SHAPE_LENGTH: db_repr.OnsMsoaColumnsNames.SHAPE_LENGTH,
+                OnsMsoaReadableField.ID: db_repr.OnsMsoaColumnsNames.OID,
+                OnsMsoaReadableField.NAME: db_repr.OnsMsoaColumnsNames.NAME,
+                OnsMsoaReadableField.READABLE_NAME: db_repr.OnsMsoaColumnsNames.READABLE_NAME,
             },
             inplace=True,
         )
@@ -165,9 +142,8 @@ class OnsMsoaCsvParser:
             chunksize=100000,
         )
 
-        cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaCsv, self.csv)
         cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaGeoJson, self.geojson)
-        cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaReadableNames, self.readable_name_csv)
+        cacher.DbCacheInst.set_file_modified(cacher.DatafileName.OnsMsoaReadableNames, self.csv)
 
         self.logger.info(
             f"Finished parsing ONS MSOA file, wrote {len(rows.index)} items"
@@ -185,12 +161,36 @@ class OnsMsoaCsvParser:
                 )
                 return result
 
+    def get_msoa_by_name(self, msoa_name: str) -> Optional[db_repr.OnsMsoa]:
+        with Session(self.engine) as session:
+            if len(msoa_name) == 0:
+                raise ValueError("You must provide a string that isn't empty!")
+            else:
+                result = (
+                    session.query(db_repr.OnsMsoa)
+                    .filter(db_repr.OnsMsoa.name == msoa_name)
+                    .one()
+                )
+                return result
+
+    def get_msoa_by_readable_name(self, msoa_readable_name: str) -> Optional[db_repr.OnsMsoa]:
+        with Session(self.engine) as session:
+            if len(msoa_readable_name) == 0:
+                raise ValueError("You must provide a string that isn't empty!")
+            else:
+                result = (
+                    session.query(db_repr.OnsMsoa)
+                    .filter(db_repr.OnsMsoa.readable_name == msoa_readable_name)
+                    .one()
+                )
+                return result
+
     def clear_all(self):
         """Clears all rows from the ONS MSOA table"""
         with Session(self.engine) as session:
             session.query(db_repr.OnsMsoa).delete()
             session.commit()
-            cacher.DbCacheInst.clear_file_modified(self.csv_name)
+            cacher.DbCacheInst.clear_file_modified(cacher.DatafileName.OnsMsoaReadableNames)
 
 
 class CensusAgeByMsoaFields(enum.StrEnum):
@@ -322,7 +322,7 @@ class CensusAgeByMsoaCsvParser:
             cacher.DbCacheInst.clear_file_modified(self.csv_name)
 
 
-def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
+def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
     """
     This is a monolithic function that produces an image, csv and spreadsheet
     for a MSOA
@@ -330,11 +330,24 @@ def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
     TODO break down into more readable function
     """
     with Session(db_repr.get_engine()) as session:
-        msoa = (
-            session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.oid == msoa_id).one()
-        )
+        # Try using every kind of name
+        try:
+            msoa = (
+                session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.oid == msoa_input).one()
+            )
+        except sqlalchemy.exc.NoResultFound:
+            try:
+                msoa = (
+                    session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.name == msoa_input).one()
+                )
+            except sqlalchemy.exc.NoResultFound:
+                msoa = (
+                    session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.readable_name == msoa_input).one()
+                )
 
-        msoa_dir = msoa_parent_dir / f"{msoa_id}_{msoa.name}"
+        base_filename = f"{msoa.oid} {msoa.readable_name}"
+
+        msoa_dir = msoa_parent_dir / base_filename
         msoa_dir.mkdir(exist_ok=True)
 
         geometry = json.loads(msoa.geometry)
@@ -349,11 +362,9 @@ def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
         )
 
         # We used square bounds, so now check if every line actually intersects with the MSOA
-
         rslt_df = data[
             data["geometry"].apply(lambda x: x.intersects(msoa_shape))
         ].reset_index(drop=True)
-        rslt_df.to_csv("test.csv")
 
         # Find the centroids of each line
         rslt_df = rslt_df[["road_classification_number", "name_1", "geometry"]].copy()
@@ -419,10 +430,11 @@ def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
         # Labelling of plot and save to file
         x, y = msoa_shape.exterior.xy
         plt.plot(x, y, c="black")
-        plt.title(f"MSOA ID {msoa_id}")
+        plt.title(f"{base_filename}")
         plt.axis("off")
-        image_file = msoa_dir / f"{msoa_id} {msoa.name} road clusters.png"
+        image_file = msoa_dir / f"{base_filename} road clusters.png"
         plt.savefig(image_file)
+        plt.clf()
 
         # Sorting to save to csv
         rslt_df["cluster_number"] = y_kmeans
@@ -444,14 +456,14 @@ def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
         )
 
         # Save to csv
-        csv_file = msoa_dir / f"{msoa_id} {msoa.name} road clusters.csv"
+        csv_file = msoa_dir / f"{base_filename} road clusters.csv"
         rslt_df.to_csv(csv_file, index=False)
 
         # Create the excel workbook
         workbook = openpyxl.Workbook()
         sheet: Worksheet = workbook.active
 
-        sheet.title = msoa.name
+        sheet.title = msoa.readable_name
 
         rows = dataframe_to_rows(rslt_df, index=False)
 
@@ -485,9 +497,9 @@ def get_streets_in_msoa_clustered(msoa_id: str, msoa_parent_dir: Path):
                 set_border(sheet, cell_range, style="thin")
             current_row_idx += val
 
-        sheet["F1"] = f"MSOA ID {msoa_id} {msoa.name}"
+        sheet["F1"] = f"MSOA ID {base_filename}"
         img = openpyxl.drawing.image.Image(image_file)
         sheet.add_image(img, 'F2')
 
-        workbook_file = msoa_dir / f"{msoa_id} {msoa.name} road clusters.xlsx"
+        workbook_file = msoa_dir / f"{base_filename} road clusters.xlsx"
         workbook.save(filename=workbook_file)

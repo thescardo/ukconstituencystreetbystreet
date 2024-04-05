@@ -20,7 +20,6 @@ class DatafileName(enum.StrEnum):
     RoyalMailPaf = "royal_mail_paf_csv"
     OsOpennamesRoad = "os_opennames_roads"
     OnsLocalAuthorityDistrict = "ons_local_auth_csv"
-    OnsMsoaCsv = "ons_msoa_csv"
     OnsMsoaGeoJson = "ons_msoa_geojson"
     OnsMsoaReadableNames = "ons_msoa_readable_csv"
     OnsOa = "ons_oa_csv"

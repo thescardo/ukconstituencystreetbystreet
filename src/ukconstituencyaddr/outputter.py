@@ -628,38 +628,38 @@ class ConstituencyInfoOutputter:
         self,
         msoa_ids: List[str],
     ):
-        ons_msoa.get_streets_in_msoa_clustered(msoa_ids[0], self.get_msoas_folder())
-
-        counter = tqdm.tqdm(
-            total=len(msoa_ids),
-            desc="Making worksheet for all required MSOAs maps and street clusters",
-        )
-
         msoa_parent_dir = self.get_msoas_folder()
+        for msoa_id in msoa_ids:
+            ons_msoa.get_streets_in_msoa_clustered(msoa_id, msoa_parent_dir)
 
-        l = multiprocessing.Lock()
-        e = db_repr.get_engine()
-        self.logger.debug("created lock")
+        # counter = tqdm.tqdm(
+        #     total=len(msoa_ids),
+        #     desc="Making worksheet for all required MSOAs maps and street clusters",
+        # )
 
-        with multiprocessing.Pool(
-            multiprocessing.cpu_count(),
-            initializer=multiprocess_init,
-            initargs=(l, e),
-        ) as pool:
-            self.logger.debug("Started pool")
-            results: List[AsyncResult] = []
-            for msoa_id in msoa_ids:
-                results.append(
-                    pool.apply_async(
-                        ons_msoa.get_streets_in_msoa_clustered,
-                        args=(msoa_id, msoa_parent_dir),
-                    )
-                )
+        # l = multiprocessing.Lock()
+        # e = db_repr.get_engine()
+        # self.logger.debug("created lock")
 
-            for _ in results:
-                counter.update(1)
+        # with multiprocessing.Pool(
+        #     multiprocessing.cpu_count(),
+        #     initializer=multiprocess_init,
+        #     initargs=(l, e),
+        # ) as pool:
+        #     self.logger.debug("Started pool")
+        #     results: List[AsyncResult] = []
+        #     for msoa_id in msoa_ids:
+        #         results.append(
+        #             pool.apply_async(
+        #                 ons_msoa.get_streets_in_msoa_clustered,
+        #                 args=(msoa_id, msoa_parent_dir),
+        #             )
+        #         )
 
-        self.logger.debug("Finished pool")
+        #     for _ in results:
+        #         counter.update(1)
+
+        # self.logger.debug("Finished pool")
 
 
 def output_csvs():

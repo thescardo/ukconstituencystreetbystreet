@@ -194,6 +194,7 @@ class OnsOa(Base):
 class OnsMsoaColumnsNames(enum.StrEnum):
     OID = "oid"
     NAME = "name"
+    READABLE_NAME = "readable_name"
     GB_OS_EASTING = "gb_os_easting"
     GB_OS_NORTHING = "gb_os_northing"
     SHAPE_AREA = "shape_area"
@@ -205,11 +206,10 @@ class OnsMsoa(Base):
     __tablename__ = "ons_msoa"
 
     oid: Mapped[str] = mapped_column(primary_key=True)
-    name: Mapped[str]
+    name: Mapped[str] = mapped_column(index=True)
+    readable_name: Mapped[str] = mapped_column(index=True)
     gb_os_easting: Mapped[int]
     gb_os_northing: Mapped[int]
-    shape_area: Mapped[float]
-    shape_length: Mapped[float]
     geometry: Mapped[str]
 
     postcodes: Mapped[List["OnsPostcode"]] = relationship(
