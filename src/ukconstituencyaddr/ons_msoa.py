@@ -38,12 +38,12 @@ from shapely.geometry import Point, shape, LineString, MultiLineString
 from shapely import ops
 import numpy as np
 from matplotlib.path import Path
-from matplotlib.patches import PathPatch
-from matplotlib.collections import PatchCollection
+import matplotlib.patheffects as PathEffects
 
 from ukconstituencyaddr import config
 from ukconstituencyaddr.db import cacher
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+from ukconstituencyaddr.gis_helpers import combine_gpd_lines
 from ukconstituencyaddr.openpyxl_helpers import set_border
 
 
@@ -331,19 +331,30 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
     """
     with Session(db_repr.get_engine()) as session:
         # Try using every kind of name
+        found = False
         try:
             msoa = (
                 session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.oid == msoa_input).one()
             )
+            found = True
         except sqlalchemy.exc.NoResultFound:
+            found = False
+
+        if not found:
             try:
                 msoa = (
                     session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.name == msoa_input).one()
                 )
             except sqlalchemy.exc.NoResultFound:
+                found = False
+        
+        if not found:
+            try:
                 msoa = (
                     session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.readable_name == msoa_input).one()
                 )
+            except sqlalchemy.exc.NoResultFound as e:
+                raise Exception(f"Unable to find {msoa_input}") from e
 
         base_filename = f"{msoa.oid} {msoa.readable_name}"
 
@@ -372,25 +383,11 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
             subset=["road_classification_number", "name_1"], how="all"
         ).reset_index(drop=True)
 
-        def combine(input: List[LineString] | gpd.GeoSeries) -> LineString:
-            input_list = []
-            if isinstance(input, gpd.GeoSeries):
-                input_list = list(input.array)
-            else:
-                input_list = input
-
-            multi_line = MultiLineString(input_list)
-            merged_line = ops.linemerge(multi_line)
-            if isinstance(merged_line, LineString):
-                return merged_line
-            else:
-                return multi_line
-
         rslt_df = (
             rslt_df.groupby(["name_1", "road_classification_number"], dropna=False)[
                 "geometry"
             ]
-            .apply(combine)
+            .apply(combine_gpd_lines)
             .reset_index()
         )
         rslt_df["centroid"] = rslt_df["geometry"].apply(lambda x: x.centroid)
@@ -409,9 +406,25 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
         color = cm.rainbow(np.linspace(0, 1, num_clusters))
         color_mapping = {x: color[x] for x in range(len(color))}
 
+        fig, ax = plt.subplots()
+
         # Plot centers
         centers = kmeans.cluster_centers_
-        plt.scatter(centers[:, 0], centers[:, 1], c="black", s=200, alpha=0.5)
+        xs = centers[:, 0]
+        ys = centers[:, 1]
+        cluster_text = range(1, len(xs) + 1)
+
+        # plt.scatter(xs, ys, c="black", s=200, alpha=0.5)
+        for x, y, text in zip(xs, ys, cluster_text):
+            circle = plt.Circle((x, y), radius=100, color="#9F9F9F")
+            ax.add_patch(circle)
+            label = ax.annotate(text, xy=(x, y), fontsize=20, color="black", verticalalignment="center", horizontalalignment="center")
+            label.set_path_effects([PathEffects.withStroke(linewidth=5, foreground='w')])
+
+        # counter = 0
+        # for x, y in zip(xs, ys):
+        #     plt.text(x, y, str(counter), , fontsize=12)
+        #     counter += 1
 
         y_kmeans = kmeans.predict(points)
 
@@ -425,15 +438,16 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
                 lines = [this_shape]
             for line in lines:
                 x, y = line.coords.xy
-            plt.plot(x, y, c=color_mapping[y_kmeans[idx]])
+                plt.plot(x, y, c=color_mapping[y_kmeans[idx]])
 
         # Labelling of plot and save to file
         x, y = msoa_shape.exterior.xy
-        plt.plot(x, y, c="black")
+        ax.plot(x, y, c="black")
+        ax.set_aspect('equal')
         plt.title(f"{base_filename}")
         plt.axis("off")
         image_file = msoa_dir / f"{base_filename} road clusters.png"
-        plt.savefig(image_file)
+        plt.savefig(image_file, dpi=300)
         plt.clf()
 
         # Sorting to save to csv
@@ -482,15 +496,16 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
             sheet.column_dimensions[col].width = value
 
         sheet.cell(row=1, column=4).value="Canvassed"
+        sheet.cell(row=1, column=5).value="Date"
 
         header_side = Side(style="medium")
-        for x in range(1, 5):
+        for x in range(1, 6):
             sheet.cell(row=1, column=x).border = Border(left=header_side, right=header_side, top=header_side, bottom=header_side)
 
         number_of_each_cluster = rslt_df.groupby(["Cluster"]).size()
 
         current_row_idx = 2
-        columns = ["A", "B", "C", "D"]
+        columns = ["A", "B", "C", "D", "E"]
         for idx, val in number_of_each_cluster.items():
             for col in columns:
                 cell_range = f"{col}{current_row_idx}:{col}{current_row_idx+val - 1}"
