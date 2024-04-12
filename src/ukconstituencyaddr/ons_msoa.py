@@ -39,6 +39,7 @@ from shapely import ops
 import numpy as np
 from matplotlib.path import Path
 import matplotlib.patheffects as PathEffects
+from matplotlib.axes import Axes
 
 from ukconstituencyaddr import config
 from ukconstituencyaddr.db import cacher
@@ -353,8 +354,12 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
                 msoa = (
                     session.query(db_repr.OnsMsoa).filter(db_repr.OnsMsoa.readable_name == msoa_input).one()
                 )
+                found = True
             except sqlalchemy.exc.NoResultFound as e:
-                raise Exception(f"Unable to find {msoa_input}") from e
+                found = False
+
+        if not found:
+            raise Exception(f"Unable to find {msoa_input}") from e
 
         base_filename = f"{msoa.oid} {msoa.readable_name}"
 
@@ -365,36 +370,40 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
         msoa_shape = shape(geometry)
 
         # Read road shape data based on bounds of MSOA
-        data = gpd.read_file(
+        geo_data = gpd.read_file(
             config.conf.input.os_open_roads_geopackage,
             engine="pyogrio",
             layer="road_link",
             bbox=msoa_shape.bounds,
         )
 
+        # Remove motorways
+        # See https://www.ordnancesurvey.co.uk/products/os-open-roads#technical
+        geo_data.drop(index=geo_data[geo_data['road_classification'] == 'Motorway'].index, inplace=True)
+
         # We used square bounds, so now check if every line actually intersects with the MSOA
-        rslt_df = data[
-            data["geometry"].apply(lambda x: x.intersects(msoa_shape))
+        geo_data = geo_data[
+            geo_data["geometry"].apply(lambda x: x.intersects(msoa_shape))
         ].reset_index(drop=True)
 
         # Find the centroids of each line
-        rslt_df = rslt_df[["road_classification_number", "name_1", "geometry"]].copy()
-        rslt_df = rslt_df.dropna(
+        geo_data = geo_data[["road_classification_number", "name_1", "geometry"]].copy()
+        geo_data = geo_data.dropna(
             subset=["road_classification_number", "name_1"], how="all"
         ).reset_index(drop=True)
 
-        rslt_df = (
-            rslt_df.groupby(["name_1", "road_classification_number"], dropna=False)[
+        cut_down = (
+            geo_data.groupby(["name_1", "road_classification_number"], dropna=False)[
                 "geometry"
             ]
             .apply(combine_gpd_lines)
             .reset_index()
         )
-        rslt_df["centroid"] = rslt_df["geometry"].apply(lambda x: x.centroid)
+        cut_down["centroid"] = cut_down["geometry"].apply(lambda x: x.centroid)
 
         # Convert the list of centroids to tuples of points so that we can use them in scikit
         points = []
-        for _, item in rslt_df.iterrows():
+        for _, item in cut_down.iterrows():
             centroid: Point = item["centroid"]
             points.append((centroid.x, centroid.y))
 
@@ -406,30 +415,18 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
         color = cm.rainbow(np.linspace(0, 1, num_clusters))
         color_mapping = {x: color[x] for x in range(len(color))}
 
+        ax: Axes  # Type annotation workaround
         fig, ax = plt.subplots()
 
-        # Plot centers
-        centers = kmeans.cluster_centers_
-        xs = centers[:, 0]
-        ys = centers[:, 1]
-        cluster_text = range(1, len(xs) + 1)
-
-        # plt.scatter(xs, ys, c="black", s=200, alpha=0.5)
-        for x, y, text in zip(xs, ys, cluster_text):
-            circle = plt.Circle((x, y), radius=100, color="#9F9F9F")
-            ax.add_patch(circle)
-            label = ax.annotate(text, xy=(x, y), fontsize=20, color="black", verticalalignment="center", horizontalalignment="center")
-            label.set_path_effects([PathEffects.withStroke(linewidth=5, foreground='w')])
-
-        # counter = 0
-        # for x, y in zip(xs, ys):
-        #     plt.text(x, y, str(counter), , fontsize=12)
-        #     counter += 1
-
+        # 'Predict' road clusters
         y_kmeans = kmeans.predict(points)
 
+        # Plot shape of MSOA
+        x, y = msoa_shape.exterior.xy
+        ax.plot(x, y, c="black")
+
         # Plot on a map
-        for idx, item in rslt_df.iterrows():
+        for idx, item in cut_down.iterrows():
             this_shape: LineString | MultiLineString = item["geometry"]
 
             if isinstance(this_shape, MultiLineString):
@@ -440,10 +437,26 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
                 x, y = line.coords.xy
                 plt.plot(x, y, c=color_mapping[y_kmeans[idx]])
 
-        # Labelling of plot and save to file
-        x, y = msoa_shape.exterior.xy
-        ax.plot(x, y, c="black")
+        # Set aspect of plot to equal
         ax.set_aspect('equal')
+
+        # Plot centers of clusters
+        centers = kmeans.cluster_centers_
+        xs = centers[:, 0]
+        ys = centers[:, 1]
+        cluster_text = range(1, len(xs) + 1)
+
+        ylims = ax.get_ylim()
+        circle_radius = round(abs(ylims[0] - ylims[1]) / 30)
+
+        # plt.scatter(xs, ys, c="black", s=200, alpha=0.5)
+        for x, y, text in zip(xs, ys, cluster_text):
+            circle = plt.Circle((x, y), radius=circle_radius, color="#9F9F9F")
+            ax.add_patch(circle)
+            label = ax.annotate(text, xy=(x, y), fontsize=10, color="black", verticalalignment="center", horizontalalignment="center")
+            label.set_path_effects([PathEffects.withStroke(linewidth=2, foreground='w')])
+
+        # Labelling of plot and save to file
         plt.title(f"{base_filename}")
         plt.axis("off")
         image_file = msoa_dir / f"{base_filename} road clusters.png"
@@ -451,16 +464,16 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
         plt.clf()
 
         # Sorting to save to csv
-        rslt_df["cluster_number"] = y_kmeans
-        rslt_df = rslt_df.drop(["geometry", "centroid"], axis=1)
-        rslt_df = rslt_df.sort_values(
+        cut_down["cluster_number"] = y_kmeans
+        cut_down = cut_down.drop(["geometry", "centroid"], axis=1)
+        cut_down = cut_down.sort_values(
             ["cluster_number", "name_1", "road_classification_number"],
             ascending=[True, True, True],
         ).reset_index(drop=True)
 
         # Cluster index needs changing to 
-        rslt_df["cluster_number"] = rslt_df["cluster_number"].apply(lambda x: x + 1)
-        rslt_df.rename(
+        cut_down["cluster_number"] = cut_down["cluster_number"].apply(lambda x: x + 1)
+        cut_down.rename(
             columns={
                 "cluster_number": "Cluster",
                 "name_1": "Road name",
@@ -471,7 +484,7 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
 
         # Save to csv
         csv_file = msoa_dir / f"{base_filename} road clusters.csv"
-        rslt_df.to_csv(csv_file, index=False)
+        cut_down.to_csv(csv_file, index=False)
 
         # Create the excel workbook
         workbook = openpyxl.Workbook()
@@ -479,7 +492,7 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
 
         sheet.title = msoa.readable_name
 
-        rows = dataframe_to_rows(rslt_df, index=False)
+        rows = dataframe_to_rows(cut_down, index=False)
 
         for r_idx, row in enumerate(rows, 1):
             for c_idx, value in enumerate(row, 1):
@@ -502,7 +515,7 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
         for x in range(1, 6):
             sheet.cell(row=1, column=x).border = Border(left=header_side, right=header_side, top=header_side, bottom=header_side)
 
-        number_of_each_cluster = rslt_df.groupby(["Cluster"]).size()
+        number_of_each_cluster = cut_down.groupby(["Cluster"]).size()
 
         current_row_idx = 2
         columns = ["A", "B", "C", "D", "E"]
@@ -512,9 +525,9 @@ def get_streets_in_msoa_clustered(msoa_input: str, msoa_parent_dir: Path):
                 set_border(sheet, cell_range, style="thin")
             current_row_idx += val
 
-        sheet["F1"] = f"MSOA ID {base_filename}"
+        sheet["G1"] = f"MSOA ID {base_filename}"
         img = openpyxl.drawing.image.Image(image_file)
-        sheet.add_image(img, 'F2')
+        sheet.add_image(img, 'G2')
 
         workbook_file = msoa_dir / f"{base_filename} road clusters.xlsx"
         workbook.save(filename=workbook_file)
