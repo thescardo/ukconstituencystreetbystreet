@@ -4,9 +4,9 @@ import pathlib
 import shutil
 import pytest
 
-from ukconstituencyaddr import config
-from ukconstituencyaddr.db import cacher
-from ukconstituencyaddr.db.db_repr_sqlite import (
+from ukconstituencystreetbystreet import config
+from ukconstituencystreetbystreet.db import cacher
+from ukconstituencystreetbystreet.db.db_repr_sqlite import (
     Base,
     get_engine,
 )
@@ -28,12 +28,11 @@ TEST_CACHE_DB_FILE = TEST_STORAGE_FOLDER / "test.sqlite"
 @pytest.fixture(autouse=True, scope="session")
 def setup_config():
     config.MAIN_STORAGE_FOLDER = TEST_STORAGE_FOLDER
-    folder_for_csvs = TEST_CSV_FOLDER
+    folder_for_data = TEST_CSV_FOLDER
 
     config_parser = configparser.ConfigParser()
     config_parser["INPUT"] = {
-        "folder_for_csvs": "",
-        "royal_mail_paf_csv": "CSV PAF.csv",
+        "folder_for_data": "",
         "ons_contituencies_csv": "Westminster_Parliamentary_Constituencies_"
         "(December_2022)_Names_and_Codes"
         "_in_the_United_Kingdom.csv",
@@ -67,27 +66,24 @@ def setup_config():
 
     config.conf = config.RootConfigClass(
         input=config.InputConfig(
-            folders_for_csv=folder_for_csvs,
-            royal_mail_paf_csv=(
-                folder_for_csvs / input_conf["royal_mail_paf_csv"]
-            ).resolve(),
+            folder_for_data=folder_for_data,
             ons_constituencies_csv=(
-                folder_for_csvs / input_conf["ons_contituencies_csv"]
+                folder_for_data / input_conf["ons_contituencies_csv"]
             ).resolve(),
             ons_postcodes_csv=(
-                folder_for_csvs / input_conf["ons_postcodes_csv"]
+                folder_for_data / input_conf["ons_postcodes_csv"]
             ).resolve(),
             os_openname_csv_folder=pathlib.Path(input_conf["os_openname_csv_folder"]),
             ons_local_auth_csv=(
-                folder_for_csvs / input_conf["ons_local_auth_csv"]
+                folder_for_data / input_conf["ons_local_auth_csv"]
             ).resolve(),
-            ons_oa_csv=(folder_for_csvs / input_conf["ons_oa_csv"]).resolve(),
-            ons_msoa_csv=(folder_for_csvs / input_conf["ons_msoa_csv"]).resolve(),
+            ons_oa_csv=(folder_for_data / input_conf["ons_oa_csv"]).resolve(),
+            ons_msoa_csv=(folder_for_data / input_conf["ons_msoa_csv"]).resolve(),
             census_age_by_msoa_csv=(
-                folder_for_csvs / input_conf["census_age_by_msoa_csv"]
+                folder_for_data / input_conf["census_age_by_msoa_csv"]
             ).resolve(),
             census_age_by_oa_csv=(
-                folder_for_csvs / input_conf["census_age_by_oa_csv"]
+                folder_for_data / input_conf["census_age_by_oa_csv"]
             ).resolve(),
         ),
         output=config.OutputConfig(

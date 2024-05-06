@@ -33,9 +33,9 @@ from requests.status_codes import codes
 import requests.adapters
 from sqlalchemy.orm import Session
 
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
-from ukconstituencyaddr import config
-from ukconstituencyaddr.multiprocess_init import (
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet import config
+from ukconstituencystreetbystreet.multiprocess_init import (
     multiprocess_init,
 )
 

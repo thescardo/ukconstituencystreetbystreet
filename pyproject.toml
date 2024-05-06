@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 requires-python = ">=3.11"
-name = "ukconstuencystreetcheck"
+name = "ukconstituencystreetbystreet"
 description = "Parses csv files from ONS and Royal Mail free data"
 dynamic = ["dependencies", "optional-dependencies"]
 version = "0.1.0"
@@ -17,10 +17,6 @@ classifiers = [
 
 [project.license]
 text = "GPL-3.0"
-
-[tool.setuptools.dynamic]
-dependencies = { file = ["requirements.in"] }
-optional-dependencies.dev = { file = ["requirements-dev.in"] }
 
 [tool.ruff]
 # Enable the pycodestyle (`E`) and Pyflakes (`F`) rules by default.
@@ -67,8 +63,45 @@ target-version = "py311"
 profile = "black"
 
 [project.scripts]
-output-postcodes = "ukconstituencyaddr.outputter:output_csvs"
+output-postcodes = "ukconstituencystreetbystreet.outputter:output_csvs"
 
 [tool.pytest.ini_options]
 log_cli = "true"
 log_level = "DEBUG"
+
+[tool.poetry.scripts]
+ukconstituencystreetbystreet = "ukconstituencystreetbystreet.outputter:output_csvs"
+
+[tool.poetry]
+name = "ukconstituencystreetbystreet"
+version = "0.1.0"
+description = ""
+authors = ["Tomas Hotzel Escard <tomas.escardo@gmail.com>"]
+readme = "README.md"
+packages = [{include = "ukconstituencystreetbystreet"}]
+
+[tool.poetry.dependencies]
+python = "^3.11.0"
+tqdm = "^4.66.4"
+cython = "^3.0.10"
+sqlalchemy = "^2.0.30"
+pandas = "^2.2.2"
+requests = "^2.31.0"
+uvloop = "^0.19.0"
+scikit-learn = "^1.4.2"
+geojson = "^3.1.0"
+shapely = "^2.0.4"
+geopandas = "^0.14.4"
+pyogrio = "^0.7.2"
+openpyxl = "^3.1.2"
+matplotlib = "^3.8.4"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.10.0"
+ruff = "^0.4.3"
+black = "^24.4.2"
+isort = "^5.13.2"
+types-requests = "^2.31.0.20240406"
+types-tqdm = "^4.66.0.20240417"
+pytest = "^8.2.0"
+

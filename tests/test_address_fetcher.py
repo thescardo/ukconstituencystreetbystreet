@@ -4,8 +4,8 @@ from typing import List, Optional
 import pytest
 from sqlalchemy.orm import Session
 
-from ukconstituencyaddr.address_fetcher import AddrFetcher
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet.address_fetcher import AddrFetcher
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
 
 from conftest import TEST_CACHE_DB_FILE, get_test_engine
 

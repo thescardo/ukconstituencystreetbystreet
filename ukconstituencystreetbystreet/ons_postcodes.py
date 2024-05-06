@@ -15,10 +15,10 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ukconstituencyaddr import ons_constituencies
-from ukconstituencyaddr import config
-from ukconstituencyaddr.db import cacher
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet import ons_constituencies
+from ukconstituencystreetbystreet import config
+from ukconstituencystreetbystreet.db import cacher
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
 
 
 OUTCODE_REGEX = r"(?P<sub_district>(?P<district_1>(?P<area_1>[A-Z]{1,2})[0-9]{1})[A-Z]{1})|(?P<district_2>(?P<area_2>[A-Z]{1,2})[0-9]{1,2})|(?P<district_3>[A-Z]{3,4})"

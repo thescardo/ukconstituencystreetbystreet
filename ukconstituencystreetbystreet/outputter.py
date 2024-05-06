@@ -14,7 +14,7 @@ import pandas as pd
 import tqdm
 from sqlalchemy.orm import Session
 
-from ukconstituencyaddr import (
+from ukconstituencystreetbystreet import (
     address_fetcher,
     config,
     ons_constituencies,
@@ -24,8 +24,8 @@ from ukconstituencyaddr import (
     ons_oa,
     ons_local_authority_district,
 )
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
-from ukconstituencyaddr.multiprocess_init import multiprocess_init
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet.multiprocess_init import multiprocess_init
 
 
 class ConstituencyInfoOutputter:

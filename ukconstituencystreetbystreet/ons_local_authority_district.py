@@ -19,10 +19,10 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ukconstituencyaddr import ons_constituencies
-from ukconstituencyaddr import config
-from ukconstituencyaddr.db import cacher
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet import ons_constituencies
+from ukconstituencystreetbystreet import config
+from ukconstituencystreetbystreet.db import cacher
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
 
 
 class OnsLocalAuthorityField(enum.StrEnum):

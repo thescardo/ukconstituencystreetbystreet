@@ -45,8 +45,7 @@ class DataOptsConfig:
 class InputConfig:
     """Input file locations configuration"""
 
-    folders_for_csv: pathlib.Path
-    royal_mail_paf_csv: pathlib.Path
+    folder_for_data: pathlib.Path
     ons_constituencies_csv: pathlib.Path
     ons_postcodes_csv: pathlib.Path
     os_openname_csv_folder: pathlib.Path
@@ -104,8 +103,7 @@ def parse_config():
         # Otherwise fill the config with defaults and write it to the default
         # config location
         config_parser["INPUT"] = {
-            "folder_for_csvs": "",
-            "royal_mail_paf_csv": "CSV PAF.csv",
+            "folder_for_data": "",
             "ons_contituencies_csv": "Westminster_Parliamentary_Constituencies_"
             "(December_2022)_Names_and_Codes"
             "_in_the_United_Kingdom.csv",
@@ -147,44 +145,41 @@ def parse_config():
     data_opts = config_parser["DATA_OPTS"]
 
     # Convert if necessary to pathlip.Path
-    folder_for_csvs_raw = input_conf["folder_for_csvs"]
-    if folder_for_csvs_raw is None or len(folder_for_csvs_raw) == 0:
-        folder_for_csvs = pathlib.Path("").resolve()
+    folder_for_data_raw = input_conf["folder_for_data"]
+    if folder_for_data_raw is None or len(folder_for_data_raw) == 0:
+        folder_for_data = pathlib.Path("").resolve()
     else:
-        folder_for_csvs = pathlib.Path(folder_for_csvs_raw).resolve()
+        folder_for_data = pathlib.Path(folder_for_data_raw).resolve()
 
     # Read all config and convert it to correct types for easy of use in the
     # rest of the program
     global conf
     conf = RootConfigClass(
         input=InputConfig(
-            folders_for_csv=folder_for_csvs,
-            royal_mail_paf_csv=(
-                folder_for_csvs / input_conf["royal_mail_paf_csv"]
-            ).resolve(),
+            folder_for_data=folder_for_data,
             ons_constituencies_csv=(
-                folder_for_csvs / input_conf["ons_contituencies_csv"]
+                folder_for_data / input_conf["ons_contituencies_csv"]
             ).resolve(),
             ons_postcodes_csv=(
-                folder_for_csvs / input_conf["ons_postcodes_csv"]
+                folder_for_data / input_conf["ons_postcodes_csv"]
             ).resolve(),
             os_openname_csv_folder=pathlib.Path(input_conf["os_openname_csv_folder"]),
             os_open_roads_geopackage=(
-                folder_for_csvs / input_conf["os_open_roads_geopackage"]
+                folder_for_data / input_conf["os_open_roads_geopackage"]
             ).resolve(),
             ons_local_auth_csv=(
-                folder_for_csvs / input_conf["ons_local_auth_csv"]
+                folder_for_data / input_conf["ons_local_auth_csv"]
             ).resolve(),
-            ons_oa_csv=(folder_for_csvs / input_conf["ons_oa_csv"]).resolve(),
-            ons_msoa_readble_names_csv=(folder_for_csvs / input_conf["ons_msoa_readble_names_csv"]).resolve(),
+            ons_oa_csv=(folder_for_data / input_conf["ons_oa_csv"]).resolve(),
+            ons_msoa_readble_names_csv=(folder_for_data / input_conf["ons_msoa_readble_names_csv"]).resolve(),
             census_age_by_msoa_csv=(
-                folder_for_csvs / input_conf["census_age_by_msoa_csv"]
+                folder_for_data / input_conf["census_age_by_msoa_csv"]
             ).resolve(),
             census_age_by_oa_csv=(
-                folder_for_csvs / input_conf["census_age_by_oa_csv"]
+                folder_for_data / input_conf["census_age_by_oa_csv"]
             ).resolve(),
             ons_msoa_geojson=(
-                folder_for_csvs / input_conf["ons_msoa_geojson"]
+                folder_for_data / input_conf["ons_msoa_geojson"]
             ).resolve(),
         ),
         output=OutputConfig(
