@@ -17,7 +17,6 @@ from .db_repr_sqlite import (
 class DatafileName(enum.StrEnum):
     OnsConstituency = "ons_constituency_csv"
     OnsPostcode = "ons_postcode_csv"
-    RoyalMailPaf = "royal_mail_paf_csv"
     OsOpennamesRoad = "os_opennames_roads"
     OnsLocalAuthorityDistrict = "ons_local_auth_csv"
     OnsMsoaGeoJson = "ons_msoa_geojson"

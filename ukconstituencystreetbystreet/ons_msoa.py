@@ -41,11 +41,11 @@ from matplotlib.path import Path
 import matplotlib.patheffects as PathEffects
 from matplotlib.axes import Axes
 
-from ukconstituencyaddr import config
-from ukconstituencyaddr.db import cacher
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
-from ukconstituencyaddr.gis_helpers import combine_gpd_lines
-from ukconstituencyaddr.openpyxl_helpers import set_border
+from ukconstituencystreetbystreet import config
+from ukconstituencystreetbystreet.db import cacher
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet.gis_helpers import combine_gpd_lines
+from ukconstituencystreetbystreet.openpyxl_helpers import set_border
 
 
 class OnsMsoaReadableField(enum.StrEnum):

@@ -1,55 +1,81 @@
-from collections import deque
+from collections import defaultdict, deque
+import logging
+import multiprocessing
+from multiprocessing.pool import AsyncResult
 import re
-from typing import Deque, Set
+import threading
+from typing import Deque, Dict, List, Set
 import difflib
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
+import tqdm
 
-from ukconstituencyaddr.db import db_repr_sqlite as db_repr
-
-
-HOUSE_NUMBER_PATTERN = re.compile(
-    r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-/]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
+from ukconstituencystreetbystreet.db import db_repr_sqlite as db_repr
+from ukconstituencystreetbystreet.multiprocess_address_cleanup import (
+    HOUSE_NUMBER_PATTERN,
+    LTD_PO_BOX_PATTERN,
+    PO_BOX_PATTERN,
+    cleanup_addresses_for_postcode_district,
 )
-LTD_PO_BOX_PATTERN = re.compile(r".*(ltd|po box|plc).*", re.IGNORECASE)
-
-PO_BOX_PATTERN = re.compile(r".*(po box).*", re.IGNORECASE)
+from ukconstituencystreetbystreet.multiprocess_init import multiprocess_init
 
 
-def cleanup_addresses_for_postcode_district(postcode_district: str) -> str:
-    """
-    Performs parsing and clean up of 'thoroughfares' attribute of all addresses
-    in a given postcode so that we can guess the house name or number, as well as
-    removing PO boxes and the like. If a street name isn't found then don't mess
-    with the address.
+class AddrFetcher:
+    """Fetches addresses from getaddress.io by constituency."""
 
-    This is a pretty inefficient algorithm but since it is only used once per
-    constituency we can live with it for the sake of having a relatively simple
-    to understand method for clean up of address data.
-    """
-    global db_write_lock
-    engine = db_repr.get_engine()
+    def __init__(self) -> None:
+        self.logger = logging.getLogger(self.__class__.__name__)
 
-    roads_in_district: Set[str] = set()
+        self.engine = db_repr.get_engine()
 
-    try:
-        with Session(engine) as session:
-            addresses = (
-                session.query(db_repr.SimpleAddress)
-                .where(db_repr.SimpleAddress.postcode == db_repr.OnsPostcode.postcode)
-                .where(db_repr.OnsPostcode.postcode_district == postcode_district)
-                .all()
-            )
+        self._dict_lock = threading.Lock()
+        self.streets_per_postcode_outcode: Dict[str, Set[str]] = defaultdict(set)
 
-            # Fetch all roads that are in the given Postcode from the database.
-            os_roads = (
-                session.query(db_repr.OsOpennameRoad)
-                .where(db_repr.OsOpennameRoad.postcode_district == postcode_district)
-                .all()
-            )
+    def cleanup_addresses_for_postcode(
+        self, ons_postcode: db_repr.OnsPostcode
+    ) -> List[db_repr.SimpleAddress]:
+        """
+        Performs parsing and clean up of 'thoroughfares' attribute of all addresses
+        in a given postcode so that we can guess the house name or number, as well as
+        removing PO boxes and the like. If a street name isn't found then don't mess
+        with the address.
 
-            for os_road in os_roads:
-                roads_in_district.add(os_road.name)
+        This is a pretty inefficient algorithm but since it is only used once per
+        constituency we can live with it for the sake of having a relatively simple
+        to understand method for clean up of address data.
+        """
+        with Session(self.engine) as session:
+            session.add(ons_postcode)
+
+            addresses = ons_postcode.addresses
+
+            # Fetch all roads that are in the given Postcode from the database. This
+            # is done lazily so that we only fetch roads in a given postcode when we
+            # need them.
+            with self._dict_lock:
+                if (
+                    ons_postcode.postcode_district
+                    not in self.streets_per_postcode_outcode
+                ):
+                    os_roads = (
+                        session.query(db_repr.OsOpennameRoad)
+                        .where(
+                            db_repr.OsOpennameRoad.postcode_district
+                            == ons_postcode.postcode_district
+                        )
+                        .all()
+                    )
+
+                    roads = self.streets_per_postcode_outcode[
+                        ons_postcode.postcode_district
+                    ]
+                    for os_road in os_roads:
+                        roads.add(os_road.name)
+                else:
+                    roads = self.streets_per_postcode_outcode[
+                        ons_postcode.postcode_district
+                    ]
 
             not_found_1st: Deque[db_repr.SimpleAddress] = deque()
             road_names_found: Set[str] = set()
@@ -77,7 +103,7 @@ def cleanup_addresses_for_postcode_district(postcode_district: str) -> str:
 
                     # If the road name matches any of
                     close_matches = difflib.get_close_matches(
-                        each_line, roads_in_district, cutoff=0.9
+                        each_line, roads, cutoff=0.9
                     )
 
                     if len(close_matches) != 0:
@@ -173,10 +199,54 @@ def cleanup_addresses_for_postcode_district(postcode_district: str) -> str:
                     else:
                         address.house_num_or_name = address.line_1
 
-            with db_write_lock:
+            with db_repr.DB_THREADING_LOCK:
                 session.commit()
 
-            return postcode_district
-    except:
-        print(f"Exception occured!")
-        raise  # Re-raise the exception so that the process exits
+    def cleanup_all_addresses(self):
+        """Attempt to cleanup all addresses in each postcode"""
+        try:
+            with Session(self.engine) as session:
+                distinct_postcode_districts = session.query(
+                    db_repr.OnsPostcode.postcode_district.distinct()
+                ).all()
+
+            self.logger.info(
+                f"Found {len(distinct_postcode_districts)} distinct postcode districts in addresses table"
+            )
+
+            counter = tqdm.tqdm(
+                total=len(distinct_postcode_districts),
+                desc="Getting thoroughfares for all addresses",
+            )
+
+            l = multiprocessing.Lock()
+            e = db_repr.get_engine()
+            self.logger.debug("created lock")
+
+            with multiprocessing.Pool(
+                multiprocessing.cpu_count(),
+                initializer=multiprocess_init,
+                initargs=(l, e),
+            ) as pool:
+                self.logger.debug("Started pool")
+                results: List[AsyncResult] = []
+                for postcode_district in distinct_postcode_districts:
+                    results.append(
+                        pool.apply_async(
+                            cleanup_addresses_for_postcode_district,
+                            args=postcode_district,
+                        )
+                    )
+
+                for x in results:
+                    self.logger.debug(f"Finished processing district {x.get()}")
+                    counter.update(1)
+
+            self.logger.debug("Finished pool")
+
+            # tqdm(, total=len(distinct_postcode_districts), desc="Getting thoroughfares for all postcodes")
+        except Exception:
+            with Session(self.engine) as session:
+                update(db_repr.SimpleAddress).values(house_num_or_name="")
+                update(db_repr.SimpleAddress).values(thoroughfare_or_desc="")
+                session.commit()

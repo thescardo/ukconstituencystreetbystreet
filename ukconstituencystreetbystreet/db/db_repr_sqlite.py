@@ -16,7 +16,7 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 
-from ukconstituencyaddr import config
+from ukconstituencystreetbystreet import config
 
 CACHE_DB_FILE = config.MAIN_STORAGE_FOLDER / "local_cache.sqlite"
 
