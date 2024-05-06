@@ -5,3 +5,4 @@ isort
 types-requests
 types-tqdm
 pytest
+matplotlib

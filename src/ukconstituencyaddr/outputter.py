@@ -4,6 +4,7 @@ import concurrent.futures
 import json
 import logging
 import multiprocessing
+from multiprocessing.pool import AsyncResult
 import re
 from typing import List, Optional
 import difflib
@@ -24,6 +25,7 @@ from ukconstituencyaddr import (
     ons_local_authority_district,
 )
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+from ukconstituencyaddr.multiprocess_init import multiprocess_init
 
 
 class ConstituencyInfoOutputter:
@@ -496,7 +498,7 @@ class ConstituencyInfoOutputter:
                         dir
                         / f"{'_'.join(names)} Postcodes by percentage {db_repr.CensusAgeRange.R_16_35}.csv"
                     ),
-                    index=False
+                    index=False,
                 )
 
     def make_csv_addresses_in_msoas(
@@ -510,7 +512,7 @@ class ConstituencyInfoOutputter:
         def label_num(row):
             nums: List[int] = []
             for x in ["Line 4", "Line 3", "Line 2", "Line 1"]:
-                results = re.findall(r'\d+', row[x])
+                results = re.findall(r"\d+", row[x])
                 if len(results) == 0:
                     nums.append(0)
                 else:
@@ -518,11 +520,15 @@ class ConstituencyInfoOutputter:
 
             strs = [f"{x:10d}" for x in nums]
 
-            return ''.join(strs)
+            return "".join(strs)
 
         def is_flat(row):
-            for x in ["House Name or Number", "Line 1", "Line 2", "Line 3", "Line 4"]:
-                results = re.findall(r'\bapartment[s]*|flat[s]*|apt[s]*|studio[s]*|ltd*\b', row[x], flags=re.IGNORECASE)
+            for x in ["Line 1", "Line 2", "Line 3", "Line 4"]:
+                results = re.findall(
+                    r"\bapartment[s]*|flat[s]*|apt[s]*|studio[s]*|ltd|limited\b",
+                    row[x],
+                    flags=re.IGNORECASE,
+                )
                 if len(results) != 0:
                     return True
 
@@ -541,7 +547,6 @@ class ConstituencyInfoOutputter:
             for msoa in msoas:
                 query = (
                     session.query(
-                        db_repr.SimpleAddress.house_num_or_name,
                         db_repr.SimpleAddress.line_1,
                         db_repr.SimpleAddress.line_2,
                         db_repr.SimpleAddress.line_3,
@@ -549,7 +554,7 @@ class ConstituencyInfoOutputter:
                         db_repr.SimpleAddress.postcode,
                         db_repr.SimpleAddress.thoroughfare_or_desc,
                         db_repr.CensusAgeByOa.percentage_15_to_34,
-                        db_repr.CensusAgeByOa.total_15_to_34
+                        db_repr.CensusAgeByOa.total_15_to_34,
                     )
                     .join(db_repr.OnsPostcode)
                     .filter(db_repr.OnsPostcode.msoa_id == msoa.oid)
@@ -562,7 +567,6 @@ class ConstituencyInfoOutputter:
             combined_df = pd.concat(addresses_df, ignore_index=True, sort=False)
             combined_df = combined_df.rename(
                 columns={
-                    "simple_addresses_house_num_or_name": "House Name or Number",
                     "simple_addresses_line_1": "Line 1",
                     "simple_addresses_line_2": "Line 2",
                     "simple_addresses_line_3": "Line 3",
@@ -574,8 +578,10 @@ class ConstituencyInfoOutputter:
                 }
             )
             if remove_flats_and_businesses:
-                combined_df['is_flat'] = combined_df.apply(is_flat, axis=1)
-                combined_df.drop(combined_df[combined_df["is_flat"] == True].index, inplace=True)
+                combined_df["is_flat"] = combined_df.apply(is_flat, axis=1)
+                combined_df.drop(
+                    combined_df[combined_df["is_flat"] == True].index, inplace=True
+                )
                 combined_df = combined_df.drop("is_flat", axis=1)
 
             combined_df["force_num"] = combined_df.apply(label_num, axis=1)
@@ -596,7 +602,11 @@ class ConstituencyInfoOutputter:
             combined_df = combined_df.round({"census_age_by_oa_percentage_15_to_34": 2})
             combined_df = combined_df.drop("force_num", axis=1)
 
-            streets_list = combined_df["Thoroughfare or Street"].drop_duplicates().reset_index(drop=True)
+            streets_list = (
+                combined_df["Thoroughfare or Street"]
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
 
             if len(combined_df.index) == 0:
                 self.logger.debug(f"Found no postcodes for MSOAs {msoa_ids}")
@@ -607,15 +617,49 @@ class ConstituencyInfoOutputter:
                         dir
                         / f"MSOAs {'_'.join(msoa_ids)} Addresses {db_repr.CensusAgeRange.R_16_35}.csv"
                     ),
-                    index=False
+                    index=False,
                 )
                 streets_list.to_csv(
-                    str(
-                        dir
-                        / f"MSOAs {'_'.join(msoa_ids)} Streets List.csv"
-                    ),
-                    index=False
+                    str(dir / f"MSOAs {'_'.join(msoa_ids)} Streets List.csv"),
+                    index=False,
                 )
+
+    def make_clustered_streets_for_msoa(
+        self,
+        msoa_ids: List[str],
+    ):
+        msoa_parent_dir = self.get_msoas_folder()
+        for msoa_id in msoa_ids:
+            ons_msoa.get_streets_in_msoa_clustered(msoa_id, msoa_parent_dir)
+
+        # counter = tqdm.tqdm(
+        #     total=len(msoa_ids),
+        #     desc="Making worksheet for all required MSOAs maps and street clusters",
+        # )
+
+        # l = multiprocessing.Lock()
+        # e = db_repr.get_engine()
+        # self.logger.debug("created lock")
+
+        # with multiprocessing.Pool(
+        #     multiprocessing.cpu_count(),
+        #     initializer=multiprocess_init,
+        #     initargs=(l, e),
+        # ) as pool:
+        #     self.logger.debug("Started pool")
+        #     results: List[AsyncResult] = []
+        #     for msoa_id in msoa_ids:
+        #         results.append(
+        #             pool.apply_async(
+        #                 ons_msoa.get_streets_in_msoa_clustered,
+        #                 args=(msoa_id, msoa_parent_dir),
+        #             )
+        #         )
+
+        #     for _ in results:
+        #         counter.update(1)
+
+        # self.logger.debug("Finished pool")
 
 
 def output_csvs():
@@ -696,6 +740,12 @@ def output_csvs():
         help="Output csvs",
     )
     parser.add_argument(
+        "-z",
+        "--clustered",
+        action="store_true",
+        help="Output csvs of clustered roads for MSOA",
+    )
+    parser.add_argument(
         "-d",
         "--debug_get_address",
         action="store_true",
@@ -735,10 +785,16 @@ def output_csvs():
             if args.constituency:
                 for constituency in data_opts.constituencies:
                     comb.percent_fetched_for_constituency(constituency)
-            else:
+                return
+            elif args.local_authority:
                 for local_authority in data_opts.local_authorities:
                     comb.percent_fetched_for_local_authority(local_authority)
-            return
+                return
+            else:
+                raise NotImplementedError(
+                    "Unsupported for anything that isn't "
+                    "a constituency or local authority"
+                )
 
         if args.fetch:
             if args.constituency:
@@ -756,13 +812,26 @@ def output_csvs():
                 for constituency in data_opts.constituencies:
                     comb.make_csv_streets_in_constituency(name=constituency)
                     comb.make_csv_addresses_in_constituency(name=constituency)
+                return
             elif args.local_authority:
                 for local_authority in data_opts.local_authorities:
                     comb.make_csv_streets_in_local_authority(name=local_authority)
                     comb.make_csv_addresses_in_local_authority(name=local_authority)
+                return
             elif args.msoa:
-                comb.make_csv_addresses_in_msoas(data_opts.msoas, remove_flats_and_businesses=True)
-            return
+                comb.make_csv_addresses_in_msoas(
+                    data_opts.msoas, remove_flats_and_businesses=True
+                )
+                return
+            raise NotImplementedError(
+                "Only MSOA, local authority and constituencies are supported"
+            )
+
+        if args.clustered:
+            if args.msoa:
+                comb.make_clustered_streets_for_msoa(data_opts.msoas)
+                return
+            raise NotImplementedError("Only MSOA is supported at the moment")
 
         if args.postcodes_by_age:
             if args.constituency:

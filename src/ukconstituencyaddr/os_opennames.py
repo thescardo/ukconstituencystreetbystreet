@@ -29,8 +29,8 @@ class OsOpennamesFields(enum.StrEnum):
     NAME2_LANG = "NAME2_LANG"
     TYPE = "TYPE"
     LOCAL_TYPE = "LOCAL_TYPE"
-    GEOMETRY_X = "GEOMETRY_X"
-    GEOMETRY_Y = "GEOMETRY_Y"
+    GB_OS_EASTING = "GEOMETRY_X"
+    GB_OS_NORTHING = "GEOMETRY_Y"
     MOST_DETAIL_VIEW_RES = "MOST_DETAIL_VIEW_RES"
     LEAST_DETAIL_VIEW_RES = "LEAST_DETAIL_VIEW_RES"
     MBR_XMIN = "MBR_XMIN"
@@ -71,7 +71,7 @@ class OsOpenNamesCsvsParser:
         if len(self.csv_files) == 0:
             raise Exception(f"Unable to find any CSVs in {self.csv_folder}")
 
-        self.csv_name = cacher.CsvName.OsOpennamesRoad
+        self.csv_name = cacher.DatafileName.OsOpennamesRoad
 
         self.engine = db_repr.get_engine()
 
@@ -80,7 +80,7 @@ class OsOpenNamesCsvsParser:
 
     def process_csv(self):
         """Reads the CSV into the database"""
-        modified = cacher.DbCacheInst.check_and_set_file_modified(
+        modified = cacher.DbCacheInst.check_file_modified(
             self.csv_name, self.csv_folder
         )
         if not modified:
@@ -92,48 +92,86 @@ class OsOpenNamesCsvsParser:
         def strip_spaces(x: str):
             return x.replace(" ", "")
 
+        all_csvs = []
         for file in self.csv_files:
-            rows = pd.read_csv(
-                file,
-                header=0,
-                names=list(OsOpennamesFields),
-                converters={
-                    OsOpennamesFields.POSTCODE_DISTRICT: strip_spaces,
-                },
-                usecols=[
-                    OsOpennamesFields.ID,
-                    OsOpennamesFields.NAME1,
-                    OsOpennamesFields.LOCAL_TYPE,
-                    OsOpennamesFields.POSTCODE_DISTRICT,
-                    OsOpennamesFields.POPULATED_PLACE,
-                ],
+            all_csvs.append(
+                pd.read_csv(
+                    file,
+                    header=0,
+                    names=list(OsOpennamesFields),
+                    converters={
+                        OsOpennamesFields.POSTCODE_DISTRICT: strip_spaces,
+                    },
+                    usecols=[
+                        OsOpennamesFields.ID,
+                        OsOpennamesFields.NAME1,
+                        OsOpennamesFields.LOCAL_TYPE,
+                        OsOpennamesFields.POSTCODE_DISTRICT,
+                        OsOpennamesFields.POPULATED_PLACE,
+                        OsOpennamesFields.GB_OS_EASTING,
+                        OsOpennamesFields.GB_OS_NORTHING,
+                        OsOpennamesFields.MBR_XMIN,
+                        OsOpennamesFields.MBR_XMAX,
+                        OsOpennamesFields.MBR_YMIN,
+                        OsOpennamesFields.MBR_YMAX,
+                    ],
+                )
             )
 
-            rows.rename(
-                columns={
-                    OsOpennamesFields.ID: db_repr.OsOpennameRoadColumnNames.OS_ID,
-                    OsOpennamesFields.NAME1: db_repr.OsOpennameRoadColumnNames.NAME,
-                    OsOpennamesFields.LOCAL_TYPE: db_repr.OsOpennameRoadColumnNames.LOCAL_TYPE,
-                    OsOpennamesFields.POSTCODE_DISTRICT: db_repr.OsOpennameRoadColumnNames.POSTCODE_DISTRICT,
-                    OsOpennamesFields.POPULATED_PLACE: db_repr.OsOpennameRoadColumnNames.POPULATED_PLACE,
-                },
-                inplace=True,
-            )
+        rows = pd.concat(all_csvs)
 
-            rows = rows[
-                rows[db_repr.OsOpennameRoadColumnNames.LOCAL_TYPE].str.contains("Road")
-            ]
-            rows.to_sql(
-                db_repr.OsOpennameRoad.__tablename__,
-                self.engine,
-                if_exists="append",
-                index=False,
-                chunksize=100000,
-            )
+        rows = rows[rows[OsOpennamesFields.LOCAL_TYPE].str.contains("Road")]
+
+        # Convert to integer types after we've removed everything that might not have area etc
+        rows[OsOpennamesFields.GB_OS_EASTING] = rows[
+            OsOpennamesFields.GB_OS_EASTING
+        ].astype(pd.Int64Dtype())
+        rows[OsOpennamesFields.GB_OS_NORTHING] = rows[
+            OsOpennamesFields.GB_OS_NORTHING
+        ].astype(pd.Int64Dtype())
+        rows[OsOpennamesFields.MBR_XMIN] = rows[OsOpennamesFields.MBR_XMIN].astype(
+            pd.Int64Dtype()
+        )
+        rows[OsOpennamesFields.MBR_XMAX] = rows[OsOpennamesFields.MBR_XMAX].astype(
+            pd.Int64Dtype()
+        )
+        rows[OsOpennamesFields.MBR_YMIN] = rows[OsOpennamesFields.MBR_YMIN].astype(
+            pd.Int64Dtype()
+        )
+        rows[OsOpennamesFields.MBR_YMAX] = rows[OsOpennamesFields.MBR_YMAX].astype(
+            pd.Int64Dtype()
+        )
+
+        rows.rename(
+            columns={
+                OsOpennamesFields.ID: db_repr.OsOpennameRoadColumnNames.OS_ID,
+                OsOpennamesFields.NAME1: db_repr.OsOpennameRoadColumnNames.NAME,
+                OsOpennamesFields.LOCAL_TYPE: db_repr.OsOpennameRoadColumnNames.LOCAL_TYPE,
+                OsOpennamesFields.POSTCODE_DISTRICT: db_repr.OsOpennameRoadColumnNames.POSTCODE_DISTRICT,
+                OsOpennamesFields.POPULATED_PLACE: db_repr.OsOpennameRoadColumnNames.POPULATED_PLACE,
+                OsOpennamesFields.GB_OS_EASTING: db_repr.OsOpennameRoadColumnNames.GB_OS_EASTING,
+                OsOpennamesFields.GB_OS_NORTHING: db_repr.OsOpennameRoadColumnNames.GB_OS_NORTHING,
+                OsOpennamesFields.MBR_XMIN: db_repr.OsOpennameRoadColumnNames.MBR_XMIN,
+                OsOpennamesFields.MBR_XMAX: db_repr.OsOpennameRoadColumnNames.MBR_XMAX,
+                OsOpennamesFields.MBR_YMIN: db_repr.OsOpennameRoadColumnNames.MBR_YMIN,
+                OsOpennamesFields.MBR_YMAX: db_repr.OsOpennameRoadColumnNames.MBR_YMAX,
+            },
+            inplace=True,
+        )
+
+        rows.to_sql(
+            db_repr.OsOpennameRoad.__tablename__,
+            self.engine,
+            if_exists="append",
+            index=False,
+            chunksize=100000,
+        )
 
         self.logger.info(
             f"Finished parsing ONS postcodes file, wrote {len(rows.index)} items"
         )
+
+        cacher.DbCacheInst.set_file_modified(self.csv_name, self.csv_folder)
 
     def clear_all(self):
         """Clears all rows from OS open names table"""

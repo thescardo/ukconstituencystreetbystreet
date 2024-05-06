@@ -1,30 +1,12 @@
-import argparse
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-import json
-from collections import defaultdict, deque
-from dataclasses import dataclass
-import multiprocessing
-import random
+from collections import deque
 import re
-import threading
-import time
-from typing import Deque, Dict, List, Optional, Set, Tuple
-import logging
-from sqlalchemy import select, update, func
-import tqdm
-from urllib3.util.retry import Retry
-import concurrent.futures
+from typing import Deque, Set
 import difflib
 
-import requests
-from requests.status_codes import codes
-import requests.adapters
 from sqlalchemy.orm import Session
 
-from typing import Set
-
 from ukconstituencyaddr.db import db_repr_sqlite as db_repr
+
 
 HOUSE_NUMBER_PATTERN = re.compile(
     r"^(\d+[a-zA-Z]{0,1}\s{0,1}[-/]{0,1}\s{0,1}\d*[a-zA-Z]{0,1})\s+(.*)$"
@@ -32,14 +14,6 @@ HOUSE_NUMBER_PATTERN = re.compile(
 LTD_PO_BOX_PATTERN = re.compile(r".*(ltd|po box|plc).*", re.IGNORECASE)
 
 PO_BOX_PATTERN = re.compile(r".*(po box).*", re.IGNORECASE)
-
-
-def multiprocess_init(l, e):
-    global db_write_lock, engine
-    db_write_lock = l
-    engine = e
-
-    engine.dispose(close=False)
 
 
 def cleanup_addresses_for_postcode_district(postcode_district: str) -> str:
@@ -54,6 +28,7 @@ def cleanup_addresses_for_postcode_district(postcode_district: str) -> str:
     to understand method for clean up of address data.
     """
     global db_write_lock
+    engine = db_repr.get_engine()
 
     roads_in_district: Set[str] = set()
 

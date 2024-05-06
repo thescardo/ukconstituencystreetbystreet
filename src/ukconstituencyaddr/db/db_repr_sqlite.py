@@ -2,6 +2,7 @@ import enum
 import logging
 from datetime import datetime
 import pathlib
+import threading
 from typing import Any, Dict, List, Optional, Protocol
 
 from sqlalchemy import Engine, Float, ForeignKey, Integer, String, create_engine
@@ -25,6 +26,9 @@ def get_engine(local_db_filename: pathlib.Path | str = CACHE_DB_FILE) -> Engine:
         f"sqlite+pysqlite:///{str(local_db_filename)}",
     )
     return engine
+
+
+DB_THREADING_LOCK = threading.Lock()
 
 
 class Cacher(Protocol):
@@ -163,9 +167,9 @@ class OnsOa(Base):
 
     oid: Mapped[str] = mapped_column(primary_key=True)
     lsoa_id: Mapped[str]
-    msoa_id: Mapped[str] = mapped_column(ForeignKey("ons_msoa.oid"))
+    msoa_id: Mapped[str] = mapped_column(ForeignKey("ons_msoa.oid"), index=True)
     local_auth_district_id: Mapped[str] = mapped_column(
-        ForeignKey("ons_local_auth_district.oid")
+        ForeignKey("ons_local_auth_district.oid"), index=True
     )
 
     postcodes: Mapped[List["OnsPostcode"]] = relationship(
@@ -190,13 +194,23 @@ class OnsOa(Base):
 class OnsMsoaColumnsNames(enum.StrEnum):
     OID = "oid"
     NAME = "name"
+    READABLE_NAME = "readable_name"
+    GB_OS_EASTING = "gb_os_easting"
+    GB_OS_NORTHING = "gb_os_northing"
+    SHAPE_AREA = "shape_area"
+    SHAPE_LENGTH = "shape_length"
+    GEOMETRY = "geometry"
 
 
 class OnsMsoa(Base):
     __tablename__ = "ons_msoa"
 
     oid: Mapped[str] = mapped_column(primary_key=True)
-    name: Mapped[str]
+    name: Mapped[str] = mapped_column(index=True)
+    readable_name: Mapped[str] = mapped_column(index=True)
+    gb_os_easting: Mapped[int]
+    gb_os_northing: Mapped[int]
+    geometry: Mapped[str]
 
     postcodes: Mapped[List["OnsPostcode"]] = relationship(
         back_populates="msoa", lazy="select"
@@ -281,13 +295,15 @@ class OnsPostcode(Base):
     postcode_area: Mapped[str] = mapped_column(index=True)
     country_id: Mapped[Optional[str]]
     region_id: Mapped[Optional[str]]
-    constituency_id: Mapped[str] = mapped_column(ForeignKey("ons_constituency.oid"))
+    constituency_id: Mapped[str] = mapped_column(
+        ForeignKey("ons_constituency.oid"), index=True
+    )
     electoral_ward_id: Mapped[str]
     local_authority_district_id: Mapped[str] = mapped_column(
-        ForeignKey("ons_local_auth_district.oid"),
+        ForeignKey("ons_local_auth_district.oid"), index=True
     )
-    oa_id: Mapped[str] = mapped_column(ForeignKey("ons_oa.oid"))
-    msoa_id: Mapped[str] = mapped_column(ForeignKey("ons_msoa.oid"))
+    oa_id: Mapped[str] = mapped_column(ForeignKey("ons_oa.oid"), index=True)
+    msoa_id: Mapped[str] = mapped_column(ForeignKey("ons_msoa.oid"), index=True)
 
     constituency: Mapped["OnsConstituency"] = relationship(
         back_populates="postcodes", lazy="select"
@@ -354,6 +370,14 @@ class OsOpennameRoadColumnNames(enum.StrEnum):
     LOCAL_TYPE = "local_type"
     POSTCODE_DISTRICT = "postcode_district"
     POPULATED_PLACE = "populated_place"
+    GB_OS_EASTING = "gb_os_easting"
+    GB_OS_NORTHING = "gb_os_northing"
+
+    # Minimum bounding rectangle
+    MBR_XMIN = "mbr_xmin"
+    MBR_XMAX = "mbr_xmax"
+    MBR_YMIN = "mbr_ymin"
+    MBR_YMAX = "mbr_ymax"
 
 
 class OsOpennameRoad(Base):
@@ -363,9 +387,17 @@ class OsOpennameRoad(Base):
     name: Mapped[str]
     local_type: Mapped[str]
     postcode_district: Mapped[str] = mapped_column(
-        ForeignKey("ons_postcode.postcode_district"),
+        ForeignKey("ons_postcode.postcode_district"), index=True
     )
     populated_place: Mapped[Optional[str]]
+    gb_os_easting: Mapped[int]
+    gb_os_northing: Mapped[int]
+
+    # Minimum bounding rectangle
+    mbr_xmin: Mapped[int]
+    mbr_xmax: Mapped[int]
+    mbr_ymin: Mapped[int]
+    mbr_ymax: Mapped[int]
 
     ons_postcodes: Mapped[List[OnsPostcode]] = relationship(
         back_populates="roads", lazy="select"
@@ -410,7 +442,7 @@ class SimpleAddress(Base):
     locality: Mapped[Optional[str]]
     county: Mapped[Optional[str]]
     country: Mapped[Optional[str]]
-    postcode = mapped_column(ForeignKey("ons_postcode.postcode"))
+    postcode = mapped_column(ForeignKey("ons_postcode.postcode"), index=True)
 
     ons_postcode: Mapped[OnsPostcode] = relationship(
         back_populates="addresses", lazy="select"

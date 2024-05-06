@@ -51,7 +51,7 @@ class LocalAuthorityCsvParser:
         if not self.csv.exists():
             raise Exception(f"CSV file not at {self.csv}")
 
-        self.csv_name = cacher.CsvName.OnsLocalAuthorityDistrict
+        self.csv_name = cacher.DatafileName.OnsLocalAuthorityDistrict
 
         self.engine = db_repr.get_engine()
 
